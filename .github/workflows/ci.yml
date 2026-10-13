@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . "gallery-dl>=1.26"
+
+      - name: Import check
+        run: python -c "import xbm.cli, xbm.server, xbm.db, xbm.config, xbm.auth, xbm.fetcher"
+
+      - name: Ingest tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Extension check
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: |
+          for f in extension/*.js; do node --check "$f"; done
+          node -e "JSON.parse(require('fs').readFileSync('extension/manifest.json','utf8'))"
+          echo "extension OK"
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          VER=$(date +%Y%m%d)-$(git rev-parse --short HEAD)
+          tar czf "dist/xbm-${VER}.tar.gz" \
+            --exclude=.venv --exclude=__pycache__ --exclude=.git \
+            --exclude=dist \
+            DESIGN.md README.md pyproject.toml config.example.toml extension src tests
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xbm-dist
+          path: dist/
+          retention-days: 30
+
+  # TODO(M4): fpk 打包 job —— 复用 meizang 的 fnpack 流程，
+  # 待 extension/ 与 Web UI 完成后接入。
