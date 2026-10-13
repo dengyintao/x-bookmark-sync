@@ -1,0 +1,20 @@
+[project]
+name = "xbm"
+version = "0.1.0"
+description = "Sync X (Twitter) bookmarks media to local NAS storage"
+requires-python = ">=3.11"
+dependencies = [
+    "twifork==2.4.0",          # PINNED: X breaks scrapers every few weeks; upgrade only after smoke test
+    "gallery-dl>=1.26",
+]
+# NOTE: twifork is imported as `twikit` (drop-in replacement of d60/twikit)
+
+[project.scripts]
+xbm = "xbm.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
