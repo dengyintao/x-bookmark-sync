@@ -1,0 +1,24 @@
+# xbm 配置示例：复制为 config.toml 后按需修改
+# 敏感信息（cookie）不要写在这里，走 `xbm auth login` 存到 .xbm/cookies.json
+
+[data]
+# NAS 上的落地目录，飞牛示例：/vol1/x-bookmarks
+root = "/vol1/x-bookmarks"
+
+[sync]
+# 每小时一轮由外部 cron 触发；这里是单轮内的保护参数
+interval_seconds = 3600
+page_size = 20
+max_pages = 10          # 单轮最多翻页数，首次回填时用 --full --max-pages 覆盖
+request_delay = 1.5     # 请求间隔秒数（另加随机 jitter）
+fail_alert_threshold = 3  # 连续失败 N 次后告警
+
+[gallery_dl]
+# gallery-dl 额外参数，按需加
+extra_args = ["--no-check-certificate"]
+
+[notify]
+# 二选一填一个，不填则只打日志
+# bark_url = "https://api.day.app/xxxx"
+# telegram_bot_token = ""
+# telegram_chat_id = ""
