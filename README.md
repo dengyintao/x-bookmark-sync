@@ -2,54 +2,57 @@
 
 把 X（Twitter）书签里的推文自动同步到 NAS 本地：图片、视频、长文章全文。
 
-- 路线：纯免费（twifork 抓书签 + gallery-dl 下媒体），$0
+- 路线：**Chrome 扩展被动拦截 + 服务端下载**（$0，天然免疫反爬）
 - 详细设计见 [DESIGN.md](DESIGN.md)
 
 ## 快速开始
 
+### 服务端（NAS / 本机）
+
 ```bash
-# 1. 建虚拟环境（Python 3.11）
-python3.11 -m venv .venv && . .venv/bin/activate
+# 1. 建虚拟环境（Python 3.11+）
+python3 -m venv .venv && . .venv/bin/activate
 pip install -e .
 
-# 2. 系统依赖
-# Debian/Ubuntu: apt install ffmpeg
-
-# 3. 配置
+# 2. 配置
 cp config.example.toml config.toml
-# 按需改 data.root
+# 按需改 data.root（NAS 上的落地目录）
 
-# 4. 登录（⚠️ 建议小号，权衡见 DESIGN.md §2.1；二选一）
-# 方式一：程序化登录，交互式输账号密码（密码不落盘）
-xbm auth login
-# 方式二：本机 Chrome 已登录小号，直接自动提取 cookie（连密码都不用给）
-xbm auth login --from-browser chrome
-xbm auth check
-
-# 5. 首次回填 + 之后每小时增量（cron）
-xbm sync --full --max-pages 50
-xbm sync
+# 3. 启动服务（含 POST /api/ingest 去重入库）
+xbm serve --port 8765
 ```
+
+### Chrome 扩展
+
+1. Chrome 打开 `chrome://extensions`，打开开发者模式 → 「加载已解压的扩展程序」→ 选择 `extension/` 目录。
+2. 点扩展图标 → 设置服务端地址（如 `http://192.168.1.10:8765`）→ 「测试连接」。
+3. 在 x.com 登录 X 账号（哪个号登录就同步哪个号的书签，无需小号）。
+4. 点「立即同步书签」测试；之后每小时自动采集一次。
+
+详见 [extension/README.md](extension/README.md)。
 
 ## 目录结构
 
 ```text
+extension/
+  manifest.json / injected.js  # MAIN world：hook fetch/XHR，捕获书签 GraphQL
+  content.js                   # 自动滚动采集 + 数据转发
+  background.js                # 定时采集、推送服务端、失败本地队列
+  popup.html/js / options.html/js
 src/xbm/
-  cli.py          # 命令行入口（无头调试/运维）
-  server.py       # Web 服务 + REST API（fpk 常驻，M4）
-  web/            # 前端模板与静态资源（M4）
+  server.py       # Web 服务 + POST /api/ingest（去重入库、CORS）
+  cli.py          # 命令行入口（serve / 备用抓取器调试）
   config.py       # config.toml 加载
   db.py           # sqlite：去重集合 / watermark / 运行日志
-  auth.py         # cookie 存取、is_logged_in 自检、导出 cookies.txt
-  fetcher.py      # twifork 书签增量抓取
-  downloader.py   # gallery-dl 子进程下载图片/视频
-  articles.py     # 长文章全文 → Markdown
+  auth.py         # （备用）twifork 登录与 cookie 管理
+  fetcher.py      # （备用）twifork 书签增量抓取
+  downloader.py   # （M2）CDN 直链下载图片/视频
+  articles.py     # （M3）长文章全文 → Markdown
   notify.py       # 失败告警（Bark/Telegram/日志）
 ```
 
 ## 运维要点
 
 - 部署形态：飞牛 fpk 原生应用（复用 meizang 打包模板），带 Web UI，见 DESIGN.md §9。
-- twifork 版本已 pin 死，升级前先在测试环境跑 `xbm auth check && xbm sync`。
-- cookie 过期（几周~几个月一次）时 `xbm auth check` 会失败并告警，重新 `xbm auth login` 即可。
-- Docker 部署见 `Dockerfile`（M4）。
+- 扩展与服务端走同一份 ingest 协议（`POST /api/ingest`），采集器可替换；备选采集器见 DESIGN.md §2.2（Headless 浏览器）。
+- 媒体下载走 CDN 签名直链，免登录、无 cookie 维护。
