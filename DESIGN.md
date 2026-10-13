@@ -63,12 +63,14 @@
 
 **代码位置**：`extension/` 目录（manifest.json、injected.js、content.js、background.js、options 页），M1 实现。
 
-### 2.3 downloader —— 媒体下载（CDN 直链，免 cookie）
+### 2.3 downloader —— 媒体下载（CDN 直链，免 cookie）✅ M2 已实现
 
-- 扩展捕获到的媒体 URL 是 CDN 签名直链（`pbs.twimg.com` 图片 / `video.twimg.com` 视频），**免登录可直接下载**——服务端用 httpx 分块下载即可，无需 cookie、无需 gallery-dl 登录态。
-- 视频选 variants 里码率最高的渐进式 mp4；HLS（m3u8）用 ffmpeg 直接拉取 remux（NAS 上装 ffmpeg）。
-- gallery-dl 降级为可选 fallback（复杂 HLS / 边界情况）。
-- 文件命名与去重不变：`<tweet_id>_p1.jpg` / `<tweet_id>_video.mp4`，已存在跳过。
+- 扩展捕获到的媒体 URL 是 CDN 签名直链（`pbs.twimg.com` 图片 / `video.twimg.com` 视频），**免登录可直接下载**——服务端用 httpx 分块下载即可，无需 cookie。
+- 选址：`downloader.pick_best()` —— 图片转原图（`name=orig`）；视频/GIF 选 variants 里码率最高的 MP4；仅 HLS（m3u8）时走 ffmpeg remux，gallery-dl 兜底。
+- 后台队列：`xbm serve` 启动 N 个 worker 线程（`[download] workers`，默认 2），原子领取 `media_files` 中 pending/可重试任务；失败指数退避（1m→1h），超 `max_retries`（默认 5）记永久 failed。
+- 断点续传：`.part` 临时文件 + HTTP Range；已有完整文件直接标记 done（幂等）。
+- 落盘：`{download.dir || data.root/media}/{tweet_id}/{tweet_id}_{序号}.{ext}`；媒体齐后写 `meta.json`（推文元数据 + 媒体清单）。下载目录可独立配置（`[download] dir`，如指向另一块盘）。
+- 状态：`GET /api/status` 返回 `media{pending,downloading,done,failed}` + `media_dir`。
 
 ### 2.4 articles —— 长文章全文
 

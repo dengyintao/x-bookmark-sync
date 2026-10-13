@@ -23,6 +23,13 @@ class ProxyConfig:
 
 
 @dataclass
+class DownloadConfig:
+    dir: str = ""  # 留空 → {data.root}/media；可指向独立卷
+    max_retries: int = 5
+    workers: int = 2
+
+
+@dataclass
 class Config:
     data_root: Path
     page_size: int = 20
@@ -32,11 +39,19 @@ class Config:
     gallery_dl_extra_args: list = field(default_factory=list)
     notify: NotifyConfig = field(default_factory=NotifyConfig)
     proxy: ProxyConfig = field(default_factory=ProxyConfig)
+    download: DownloadConfig = field(default_factory=DownloadConfig)
 
     @property
     def state_dir(self) -> Path:
         """cookies.json / cookies.txt / xbm.db 存放目录。"""
         return self.data_root / ".xbm"
+
+    @property
+    def media_dir(self) -> Path:
+        """媒体文件根目录：[download] dir 优先，否则 {data.root}/media。"""
+        if self.download.dir:
+            return Path(self.download.dir).expanduser()
+        return self.data_root / "media"
 
 
 def _candidates(explicit: Path | None) -> list[Path]:
@@ -61,6 +76,7 @@ def load(path: Path | None = None) -> Config:
     g = data.get("gallery_dl", {})
     n = data.get("notify", {})
     px = data.get("proxy", {})
+    dl = data.get("download", {})
 
     root = d.get("root") or str(Path.home() / "x-bookmarks")
     return Config(
@@ -76,4 +92,9 @@ def load(path: Path | None = None) -> Config:
             telegram_chat_id=n.get("telegram_chat_id", ""),
         ),
         proxy=ProxyConfig(url=px.get("url", "") or ""),
+        download=DownloadConfig(
+            dir=dl.get("dir", "") or "",
+            max_retries=int(dl.get("max_retries", 5)),
+            workers=int(dl.get("workers", 2)),
+        ),
     )

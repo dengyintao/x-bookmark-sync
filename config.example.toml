@@ -27,3 +27,10 @@ extra_args = ["--no-check-certificate"]
 # 代理地址，空表示直连。国内 NAS 从 pbs.twimg.com / video.twimg.com
 # 下载媒体通常需要走代理（应用级代理，不碰系统代理）。
 # url = "http://127.0.0.1:7890"
+
+[download]
+# 媒体文件下载目录。留空则使用 {data.root}/media；
+# 可指向独立卷，如 "/vol2/x-media"。
+# dir = ""
+max_retries = 5   # 单个文件失败重试上限
+workers = 2       # 并发下载线程数

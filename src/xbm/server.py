@@ -21,6 +21,7 @@ from typing import Any
 
 from .config import Config
 from .db import Store
+from .downloader import pick_best
 
 
 def _tweet_info(t: dict[str, Any]) -> dict[str, Any]:
@@ -39,9 +40,9 @@ def _tweet_info(t: dict[str, Any]) -> dict[str, Any]:
 
 
 def ingest_payload(payload: dict[str, Any], store: Store) -> dict[str, Any]:
-    """去重入库，返回统计。幂等：重复推送无副作用。"""
+    """去重入库 + 媒体入下载队列，返回统计。幂等：重复推送无副作用。"""
     tweets = payload.get("tweets") or []
-    new_count, dup_count = 0, 0
+    new_count, dup_count, media_count = 0, 0, 0
     for t in tweets:
         info = _tweet_info(t)
         tid = info["tweet_id"]
@@ -52,12 +53,20 @@ def ingest_payload(payload: dict[str, Any], store: Store) -> dict[str, Any]:
             continue
         store.record_tweet(info)
         new_count += 1
+        # 媒体入下载队列（选最佳变体）
+        for m in (t.get("media") or []):
+            picked = pick_best(m)
+            if picked:
+                kind, url = picked
+                store.add_media(tid, kind, url)
+                media_count += 1
     run_id = store.start_run()
     store.finish_run(run_id, new_count)
     return {
         "ok": True,
         "new_count": new_count,
         "dup_count": dup_count,
+        "media_queued": media_count,
         "total": store.count_tweets(),
     }
 
@@ -95,6 +104,8 @@ class Handler(BaseHTTPRequestHandler):
                 "service": "xbm",
                 "tweets": self.store.count_tweets(),
                 "watermark": self.store.latest_tweet_id(),
+                "media": self.store.media_stats(),
+                "media_dir": str(self.config.media_dir),
                 "time": time.time(),
             })
         else:
@@ -134,12 +145,17 @@ def make_server(cfg: Config, port: int) -> ThreadingHTTPServer:
 
 
 def run(cfg: Config, port: int = 8765) -> None:
+    from .downloader import Downloader
     server = make_server(cfg, port)
-    print(f"xbm serve on :{port}  (data: {cfg.data_root})")
+    store = server._xbm_store
+    downloader = Downloader(cfg, store)
+    downloader.start()
+    print(f"xbm serve on :{port}  (data: {cfg.data_root}, media: {cfg.media_dir})")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        server._xbm_store.close()
+        downloader.stop()
+        store.close()
         server.server_close()
