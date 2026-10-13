@@ -19,7 +19,7 @@ pip install -e .
 cp config.example.toml config.toml
 # 按需改 data.root
 
-# 4. 登录（⚠️ 用小号！二选一）
+# 4. 登录（⚠️ 建议小号，权衡见 DESIGN.md §2.1；二选一）
 # 方式一：程序化登录，交互式输账号密码（密码不落盘）
 xbm auth login
 # 方式二：本机 Chrome 已登录小号，直接自动提取 cookie（连密码都不用给）
