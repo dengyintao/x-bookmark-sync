@@ -10,6 +10,7 @@ watermark = tweets 表中 rowid 最新的一条（无需另建表）。
 from __future__ import annotations
 
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -47,66 +48,76 @@ CREATE TABLE IF NOT EXISTS sync_runs(
 class Store:
     def __init__(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(db_path))
+        # ThreadingHTTPServer 多线程共用连接：关掉线程检查 + 全局锁串行化
+        self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(_SCHEMA)
+        self._lock = threading.Lock()
+        with self._lock:
+            self._conn.executescript(_SCHEMA)
 
     def seen(self, tweet_id: str) -> bool:
-        row = self._conn.execute(
-            "SELECT 1 FROM tweets WHERE tweet_id=?", (tweet_id,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM tweets WHERE tweet_id=?", (tweet_id,)
+            ).fetchone()
         return row is not None
 
     def record_tweet(self, info: dict[str, Any]) -> None:
-        self._conn.execute(
-            """INSERT OR IGNORE INTO tweets
-               (tweet_id, author, screen_name, text, created_at, synced_at, has_article)
-               VALUES (?,?,?,?,?,?,?)""",
-            (
-                info["tweet_id"],
-                info.get("author", ""),
-                info.get("screen_name", ""),
-                info.get("text", ""),
-                info.get("created_at", ""),
-                time.time(),
-                1 if info.get("has_article") else 0,
-            ),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                """INSERT OR IGNORE INTO tweets
+                   (tweet_id, author, screen_name, text, created_at, synced_at, has_article)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (
+                    info["tweet_id"],
+                    info.get("author", ""),
+                    info.get("screen_name", ""),
+                    info.get("text", ""),
+                    info.get("created_at", ""),
+                    time.time(),
+                    1 if info.get("has_article") else 0,
+                ),
+            )
+            self._conn.commit()
 
     def latest_tweet_id(self) -> str | None:
         """watermark：最新入库的一条 tweet_id。"""
-        row = self._conn.execute(
-            "SELECT tweet_id FROM tweets ORDER BY rowid DESC LIMIT 1"
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT tweet_id FROM tweets ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
         return row["tweet_id"] if row else None
 
     def count_tweets(self) -> int:
-        row = self._conn.execute("SELECT COUNT(*) AS n FROM tweets").fetchone()
+        with self._lock:
+            row = self._conn.execute("SELECT COUNT(*) AS n FROM tweets").fetchone()
         return row["n"]
 
     def start_run(self) -> int:
-        cur = self._conn.execute(
-            "INSERT INTO sync_runs(started_at, status) VALUES (?, 'running')",
-            (time.time(),),
-        )
-        self._conn.commit()
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO sync_runs(started_at, status) VALUES (?, 'running')",
+                (time.time(),),
+            )
+            self._conn.commit()
         return cur.lastrowid
 
     def finish_run(self, run_id: int, new_count: int,
                    status: str = "ok", error: str = "") -> None:
-        self._conn.execute(
-            """UPDATE sync_runs
-               SET finished_at=?, new_count=?, status=?, error=?
-               WHERE id=?""",
-            (time.time(), new_count, status, error, run_id),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                """UPDATE sync_runs
+                   SET finished_at=?, new_count=?, status=?, error=?
+                   WHERE id=?""",
+                (time.time(), new_count, status, error, run_id),
+            )
+            self._conn.commit()
 
     def consecutive_failures(self) -> int:
-        rows = self._conn.execute(
-            "SELECT status FROM sync_runs ORDER BY id DESC LIMIT 20"
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT status FROM sync_runs ORDER BY id DESC LIMIT 20"
+            ).fetchall()
         n = 0
         for r in rows:
             if r["status"] == "failed":
@@ -116,4 +127,5 @@ class Store:
         return n
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()

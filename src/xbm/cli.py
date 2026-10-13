@@ -2,7 +2,8 @@
 
     xbm auth login [--from-browser chrome|firefox|edge|safari] [--manual]
     xbm auth check
-    xbm sync [--full] [--max-pages N]
+    xbm sync [--full] [--max-pages N]      # 备用抓取器（twifork）
+    xbm serve [--port 8765]                # 启动 Web 服务（含 /api/ingest）
     xbm export [--out bookmarks.jsonl]
 """
 from __future__ import annotations
@@ -132,6 +133,14 @@ def cmd_export(args) -> int:
     return 0
 
 
+def cmd_serve(args) -> int:
+    from . import server as server_mod
+    cfg, store = _ctx(args)
+    store.close()  # server 会自己建 Store
+    server_mod.run(cfg, port=args.port)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="xbm", description="同步 X 书签到 NAS 本地")
     p.add_argument("--config", help="config.toml 路径")
@@ -155,6 +164,10 @@ def build_parser() -> argparse.ArgumentParser:
     pe = sub.add_parser("export", help="导出书签索引 JSONL")
     pe.add_argument("--out", default="bookmarks.jsonl")
     pe.set_defaults(func=cmd_export)
+
+    pv = sub.add_parser("serve", help="启动 Web 服务（含 /api/ingest）")
+    pv.add_argument("--port", type=int, default=8765)
+    pv.set_defaults(func=cmd_serve)
     return p
 
 
