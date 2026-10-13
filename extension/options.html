@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><style>
+body{padding:24px;font-family:system-ui,sans-serif;font-size:14px;max-width:520px}
+label{display:block;margin:12px 0 4px;color:#555}
+input{width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:14px}
+button{margin-top:16px;padding:8px 20px;border:1px solid #ccc;border-radius:6px;background:#1d9bf0;color:#fff;cursor:pointer;font-size:14px}
+button.ghost{background:#fff;color:#333;margin-left:8px}
+#msg{margin-top:12px;color:#666}
+</style></head>
+<body>
+<h2>X Bookmark Sync 设置</h2>
+<label>服务端地址（NAS 上 xbm serve 的地址）</label>
+<input id="serverUrl" placeholder="http://192.168.1.10:8765">
+<label>自动采集间隔（分钟）</label>
+<input id="intervalMinutes" type="number" min="15" value="60">
+<div>
+<button id="save">保存</button>
+<button id="test" class="ghost">测试连接</button>
+</div>
+<div id="msg"></div>
+<script src="options.js"></script>
+</body></html>
