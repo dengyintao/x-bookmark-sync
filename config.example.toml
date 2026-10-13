@@ -22,3 +22,8 @@ extra_args = ["--no-check-certificate"]
 # bark_url = "https://api.day.app/xxxx"
 # telegram_bot_token = ""
 # telegram_chat_id = ""
+
+[proxy]
+# 代理地址，空表示直连。国内 NAS 从 pbs.twimg.com / video.twimg.com
+# 下载媒体通常需要走代理（应用级代理，不碰系统代理）。
+# url = "http://127.0.0.1:7890"

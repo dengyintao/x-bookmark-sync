@@ -18,6 +18,11 @@ class NotifyConfig:
 
 
 @dataclass
+class ProxyConfig:
+    url: str = ""  # 空表示直连，如 http://127.0.0.1:7890
+
+
+@dataclass
 class Config:
     data_root: Path
     page_size: int = 20
@@ -26,6 +31,7 @@ class Config:
     fail_alert_threshold: int = 3
     gallery_dl_extra_args: list = field(default_factory=list)
     notify: NotifyConfig = field(default_factory=NotifyConfig)
+    proxy: ProxyConfig = field(default_factory=ProxyConfig)
 
     @property
     def state_dir(self) -> Path:
@@ -54,6 +60,7 @@ def load(path: Path | None = None) -> Config:
     s = data.get("sync", {})
     g = data.get("gallery_dl", {})
     n = data.get("notify", {})
+    px = data.get("proxy", {})
 
     root = d.get("root") or str(Path.home() / "x-bookmarks")
     return Config(
@@ -68,4 +75,5 @@ def load(path: Path | None = None) -> Config:
             telegram_bot_token=n.get("telegram_bot_token", ""),
             telegram_chat_id=n.get("telegram_chat_id", ""),
         ),
+        proxy=ProxyConfig(url=px.get("url", "") or ""),
     )

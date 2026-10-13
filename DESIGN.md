@@ -55,6 +55,12 @@
 
 **依赖**：某台机器（Mac/PC）的 Chrome 保持运行并登录 X；扩展 options 页配置服务端地址（如 `http://NAS-IP:端口` 或 fnConnect 域名）。
 
+**备选采集器：Headless 浏览器（Playwright，常驻 NAS 端）**
+
+- 原理相同（真浏览器 + X 自身 JS 生成 token，免疫反爬），只是把"用户的桌面 Chrome"换成 NAS 上常驻的 headless Chromium：Playwright 定时打开 `x.com/i/bookmarks`，用 `page.on('response')` 拦截 GraphQL 响应，解析后 POST 到 `/api/ingest`。与扩展是同一份 ingest 协议，可并存。
+- 代价：① **cookie 维护回归**——headless 也要登录态，NAS 无显示器，首次登录需在 PC 上登好后把 `auth_token`/`ct0` 注入（`context.add_cookies`），并处理过期；② **吃资源**——Chromium headless 约 300–500MB 内存 + ~170MB 浏览器二进制 + 一堆系统依赖（`playwright install-deps` 走 apt）。
+- 结论：扩展能覆盖时不做；只有当"必须摆脱桌面 Chrome"成为刚需时再加。M1/M2 不做。
+
 **代码位置**：`extension/` 目录（manifest.json、injected.js、content.js、background.js、options 页），M1 实现。
 
 ### 2.3 downloader —— 媒体下载（CDN 直链，免 cookie）
@@ -110,7 +116,7 @@ sqlite 三张表：`tweets(tweet_id PK, author, text, created_at, synced_at)`、
 - 同步引擎单实例锁，防止上一轮没跑完又起一轮。
 - 健康检查：连续失败 N 次（默认 3）→ webhook 告警。告警通道可配：Bark / Server酱 / Telegram Bot，默认只打日志。
 - 日志按天轮转，保留 30 天。
-- 网络：twifork/gallery-dl 需直连 x.com，NAS 上按需走代理（参考 meizang 的代理配置思路，或直接用系统环境变量 `https_proxy`）。
+- 网络：服务端从 `pbs.twimg.com` / `video.twimg.com` 下载媒体，国内需走代理；在 `config.toml` 的 `[proxy]` 节配置 `url`（如 `http://127.0.0.1:7890`），留空则直连。应用级代理，不碰系统代理（与 meizang 的代理设计思路一致）。
 
 ## 3. CLI 设计
 
