@@ -7,74 +7,62 @@
 ## 1. 总体架构
 
 ```text
-                    ┌─────────────────┐
-                    │   scheduler     │  cron / Docker，每小时一轮
-                    └────────┬────────┘
+                    ┌──────────────────┐
+                    │  Chrome 扩展(MV3) │
+                    │  注入页面上下文    │
+                    │  hook fetch/XHR   │
+                    │  捕获书签 GraphQL  │
+                    └────────┬─────────┘
+                             │ POST /api/ingest
                              ▼
-┌──────────┐      ┌──────────────────┐      ┌──────────────────┐
-│  auth    │─────▶│  fetcher         │─────▶│  downloader      │
-│ cookie   │      │  twifork         │      │  gallery-dl      │
-│ 自检     │      │  书签增量拉取     │      │  图片/视频落盘    │
-└──────────┘      └────────┬─────────┘      └────────┬─────────┘
-                           │                       │
-                           ▼                       ▼
-                    ┌──────────────────┐   ┌──────────────────┐
-                    │  articles        │   │  store           │
-                    │  长文章→Markdown  │   │  NAS目录 + sqlite │
-                    └──────────────────┘   └──────────────────┘
+┌──────────────────┐      ┌──────────────────┐      ┌──────────────────┐
+│  ingestion API   │─────▶│  downloader      │─────▶│  store           │
+│  按tweet_id去重   │      │  CDN直链直接下载  │      │  NAS目录 + sqlite │
+│  入库            │      │  （免 cookie）    │      │                  │
+└──────────────────┘      └──────────────────┘      └──────────────────┘
 ```
 
 核心原则：**增量、幂等、可断点续传**。任何一步失败都不污染已同步数据，下一轮自动补上。
 
+> 架构说明：采集层原为 twifork 主动轮询（见 git 历史），2026-10-13 起切换为 Chrome 扩展被动拦截。
+> 服务端（ingestion/store/downloader/画廊 UI/fpk）80% 设计保留，只是采集方式换了；
+> 已实现的 twifork 抓取器（`src/xbm/fetcher.py`）保留为**备用抓取器**。
+
 ## 2. 模块设计
 
-### 2.1 auth —— 认证与 Cookie 管理
+### 2.1 auth —— 认证（插件路线下大幅简化）
 
-> 说明：X 官方没有扫码登录（二维码仅用于 2FA 验证器绑定），所以"扫码自动登录"此路不通。
-> 改为下面两种**自动获取登录信息**的方式，目标都是：用户永不碰 DevTools。
+插件路线用**浏览器现有登录态**，服务端不再需要 X cookie：
 
-**方式一：程序化登录（默认，`xbm auth login`）**
+- 扩展跑在用户自己的 Chrome 里，拦截的是 X 页面自己收到的数据——登录态就是用户当前登录的号。**哪个号登录 Chrome，就同步哪个号的书签**，小号/main 两难不存在了。
+- 服务端下载媒体用 CDN 签名直链（`pbs.twimg.com` / `video.twimg.com`），免登录，无需 cookie。
+- 因此：**无 cookie 过期维护、无程序化登录、无密码处理**。`auth.py` 的三种登录方式降级为备用抓取器专用（见 git 历史）。
 
-- 交互式输入用户名、邮箱、密码（`getpass` 即时输入，**密码不落盘**）。
-- 调用 twifork `await client.login(auth_info_1=用户名, auth_info_2=邮箱, password=密码, cookies_file='.xbm/cookies.json')`，自动走完 X 登录流程并保存 cookie。
-- 之后所有轮询都从 `cookies.json` 恢复，不再需要密码。
-- 注意：若 X 弹出"验证身份"（邮箱验证码等），程序化登录可能卡住，此时降级用方式二。
+### 2.2 采集：Chrome 扩展（MV3）+ ingestion API
 
-**方式二：从本机浏览器自动提取（`xbm auth login --from-browser chrome`）**
+**原理**（被动拦截，与 rainux/TBD 同路线）：扩展向 x.com 页面注入脚本（`chrome.scripting.executeScript`，`world: 'MAIN'`），hook `window.fetch` / `XMLHttpRequest`，把 X 前端自己收到的 Bookmarks GraphQL 响应经 `postMessage` 转发给 content script，再由 background service worker POST 到服务端 `/api/ingest`。反机器人 token 由 X 自己的 JS 生成，**天然免疫反爬**（无 queryId 轮换、无 transaction-id 伪造问题）。
 
-- 用户在自己电脑的 Chrome/Firefox 里正常登录 X 小号一次（正常过验证，成功率 100%）。
-- 工具用 gallery-dl/yt-dlp 同款机制（`--cookies-from-browser`）自动读取浏览器 cookie jar，提取 `auth_token` + `ct0`。
-- 用户连密码都不用给工具。首次在有浏览器的机器（Mac/PC）上跑一次，把 `.xbm/` 拷到 NAS 即可。
-- 兜底：`xbm auth login --manual` 手动粘贴两个 cookie（原 DevTools 方案保留）。
+**扩展行为**：
 
-**通用规则**
+- 定时（`chrome.alarms`，每小时）：自动打开 `x.com/i/bookmarks`（后台/pinned tab），滚动加载——增量只需首屏 1–2 页，首次回填模式滚到底；捕获后关 tab。
+- 被动：用户平时手动刷书签页时也实时捕获。
+- 推送内容：tweet_id、文本、作者、时间、媒体 URL 列表（含视频 variants）、外链、是否含 article。
 
-- 只需要两个 cookie：`auth_token`、`ct0`；`cookies.json`（twifork 原生格式）权限 600。
-- 自动导出 Netscape 格式 `cookies.txt` 供 gallery-dl 使用（`gallery-dl --cookies`）。
-- 每次同步前先 `await client.is_logged_in()` 自检；失败则发告警并直接退出，**不重试、不空转**（避免无效请求触发风控）。
-- ⚠️ 必须用**小号**登录，绝不用主号。这是整套方案里唯一不可妥协的风控要求。
+**服务端 `/api/ingest`**：
 
-### 2.2 fetcher —— 书签增量抓取（twifork）
+- 按 tweet_id 去重（已见即跳过），新推文入库 tweets 表，媒体 URL 入下载队列。
+- 幂等：重复推送无副作用；断点续传天然成立（下次推送补上）。
 
-- 依赖：`pip install twifork`，代码里 `import twikit`（drop-in 替换，包名和导入名不一样注意）。
-- 初始化：`Client('zh-CN')` → `set_cookies({...})` 或 `load_cookies('cookies.json')`。
-- 分页：`await client.get_bookmarks(count=20)` 按 cursor 翻页。
-- **增量逻辑**（书签接口无 `since_id`、无收藏时间戳，只能客户端自己记）：
-  - sqlite 存 `seen_tweet_ids` 集合 + `watermark`（最新一条 tweet id）；
-  - 每轮从第一页开始翻，遇到已见 id 即停止；
-  - 单轮翻页上限可配置（默认 10 页），防止某次书签暴增时跑太久。
-- **限速**：请求间隔 ≥ 1.5s + 随机 jitter；每小时一轮；新书签少时每轮只有 1–2 个请求，账号行为几乎不可见。
-- 提取字段：`tweet.id`、`text`、`created_at`、`user.screen_name`、展开后的外链 urls、media 列表（photos / videos / video_info.variants）、是否引用 article、card 信息。
-- 视频直链：优先选 variants 里码率最高的渐进式 mp4；HLS-only 的不自己处理，丢给 gallery-dl。
+**依赖**：某台机器（Mac/PC）的 Chrome 保持运行并登录 X；扩展 options 页配置服务端地址（如 `http://NAS-IP:端口` 或 fnConnect 域名）。
 
-### 2.3 downloader —— 媒体下载（gallery-dl）
+**代码位置**：`extension/` 目录（manifest.json、injected.js、content.js、background.js、options 页），M1 实现。
 
-- 以**子进程**方式调用（比当库用更稳定、升级互不影响）：
-  `gallery-dl --cookies cookies.txt -d <dest_dir> <tweet_url>`
-- 配置要点：`extractor.twitter.videos: true`；用 `--cookies-from-browser` 可免手动导出（NAS 无桌面浏览器时用 cookies.txt 方案）。
-- 文件命名：`<tweet_id>_p1.jpg` / `<tweet_id>_video.mp4` —— 按 tweet_id 命名天然去重，已存在直接跳过。
-- HLS（m3u8）视频：gallery-dl 自动拉 ts 分片 + ffmpeg remux 成 mp4，**NAS/容器里必须装 ffmpeg**。
-- 音频：X 的语音推文/Space 本质也是 HLS，走同一链路；Space 直播回放可用 twifork 的 spaces 接口拿 HLS 地址（二期再做）。
+### 2.3 downloader —— 媒体下载（CDN 直链，免 cookie）
+
+- 扩展捕获到的媒体 URL 是 CDN 签名直链（`pbs.twimg.com` 图片 / `video.twimg.com` 视频），**免登录可直接下载**——服务端用 httpx 分块下载即可，无需 cookie、无需 gallery-dl 登录态。
+- 视频选 variants 里码率最高的渐进式 mp4；HLS（m3u8）用 ffmpeg 直接拉取 remux（NAS 上装 ffmpeg）。
+- gallery-dl 降级为可选 fallback（复杂 HLS / 边界情况）。
+- 文件命名与去重不变：`<tweet_id>_p1.jpg` / `<tweet_id>_video.mp4`，已存在跳过。
 
 ### 2.4 articles —— 长文章全文
 
@@ -158,10 +146,10 @@ dependencies = ["twifork==x.y.z", "gallery-dl>=1.26"]  # twifork 必须 pin 死�
 
 ## 6. MVP 里程碑
 
-- **M1**：auth + fetcher 跑通，`xbm sync` 能打印新增书签列表（不下载）。
-- **M2**：接 gallery-dl，图片/视频落盘，断点续传验证。
-- **M3**：文章全文 → Markdown。
-- **M4**：Web UI（总览/认证/同步/画廊/设置 5 个页面）+ fpk 打包（复用 meizang 模板）+ 失败告警。
+- **M1**：Chrome 扩展 MVP（拦截书签 GraphQL + POST 推送）+ 服务端 `/api/ingest`（去重入库）；`xbm ingest --mock` 本地调通。
+- **M2**：downloader（CDN 直链下载 + ffmpeg HLS），图片/视频落盘，断点续传验证。
+- **M3**：文章全文（扩展用页面会话代抓 TweetDetail，或用户点开文章时捕获）→ Markdown。
+- **M4**：Web UI（总览/同步/画廊/设置 4 个页面，认证页取消）+ fpk 打包（复用 meizang 模板）+ 失败告警。
 
 ## 7. 待确认
 
@@ -199,13 +187,14 @@ fpk (run-as=package, install_dep_apps=python312)
 └── SQLite（去重/watermark/运行日志，存 TRIM_PKGVAR，升级不丢）
 ```
 
-### 9.2 UI 页面（MVP）
+### 9.2 UI 页面（MVP，插件路线下 4 个页面——认证页取消）
 
-1. **总览**：同步状态（上次成功时间、新增数、下次运行）、cookie 有效性、失败告警横幅。
-2. **认证**：X 小号登录表单（用户名/密码/TOTP 可选）→ 程序化登录；cookie 状态展示；手动粘贴兜底。**密码只进内存，不落盘、不记日志。**
-3. **同步**：手动触发本轮同步、首次回填（可设页数）、运行日志流式查看、历史运行记录。
-4. **画廊**：已同步书签按时间/作者浏览，图片视频缩略图预览，文章 Markdown 阅读视图，关键词搜索。
-5. **设置**：存储目录（飞牛目录授权）、轮询间隔、告警通道（Bark/Telegram）、代理配置。
+1. **总览**：同步状态（上次成功时间、新增数、下次运行）、扩展连接状态、失败告警横幅。
+2. **同步**：手动触发本轮同步（让扩展立即刷一次）、首次回填、运行日志流式查看、历史运行记录。
+3. **画廊**：已同步书签按时间/作者浏览，图片视频缩略图预览，文章 Markdown 阅读视图，关键词搜索。
+4. **设置**：存储目录（飞牛目录授权）、扩展推送地址、轮询间隔、告警通道（Bark/Telegram）、代理配置。
+
+（认证页取消：登录态完全由浏览器持有，服务端不再管 X 登录。）
 
 ### 9.3 REST API（草案）
 
