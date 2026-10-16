@@ -8,10 +8,20 @@
 
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
+  function pageType() {
+    if (/^\/i\/bookmarks(?:\/|$)/.test(location.pathname)) return 'bookmarks';
+    if (/^\/i\/history(?:\/|$)/.test(location.pathname)) {
+      const tab = document.querySelector('[role="tab"][aria-selected="true"]');
+      if (!tab) return 'loading';
+      return /^(书签|Bookmarks)$/i.test(tab.textContent.trim()) ? 'bookmarks' : 'history_other';
+    }
+    return /\/(?:login|flow\/login|account\/access)(?:\/|$)/.test(location.pathname) ? 'login' : 'other';
+  }
+
   // 转发 injected.js 推送的实时捕获（用户被动浏览场景）
   window.addEventListener('message', function (ev) {
     if (ev.source !== window || !ev.data || ev.data.__xbm !== true) return;
-    if (ev.data.type === 'tweets' && ev.data.tweets && ev.data.tweets.length) {
+    if (pageType() === 'bookmarks' && ev.data.type === 'tweets' && ev.data.tweets && ev.data.tweets.length) {
       chrome.runtime.sendMessage({
         type: 'tweets-captured',
         tweets: ev.data.tweets,
@@ -21,20 +31,22 @@
   });
 
   function getBuffer() {
-    return new Promise(function (resolve) {
+    return new Promise(function (resolve, reject) {
+      let timeout;
       function onMsg(ev) {
         if (ev.source !== window || !ev.data || ev.data.__xbm !== true) return;
         if (ev.data.type === 'buffer') {
+          clearTimeout(timeout);
           window.removeEventListener('message', onMsg);
-          resolve(ev.data.tweets || []);
+          resolve({ tweets: ev.data.tweets || [], diagnostics: ev.data.diagnostics || {} });
         }
       }
       window.addEventListener('message', onMsg);
       window.postMessage({ __xbm: true, type: 'get-buffer' }, '*');
       // 兜底超时：injected.js 未就绪时返回空
-      setTimeout(function () {
+      timeout = setTimeout(function () {
         window.removeEventListener('message', onMsg);
-        resolve([]);
+        reject(new Error('页面采集缓冲未响应，请刷新 X 页面后重试'));
       }, 3000);
     });
   }
@@ -44,6 +56,7 @@
     let stable = 0;
     for (let i = 0; i < maxScrolls; i++) {
       window.scrollTo(0, document.body.scrollHeight);
+      chrome.runtime.sendMessage({ type: 'collect-progress', scrolls: i + 1 }).catch(function () {});
       await sleep(2200);
       const h = document.body.scrollHeight;
       if (h === lastHeight) {
@@ -58,7 +71,15 @@
 
   // background 指令：开始一次采集
   chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+    if (msg && msg.type === 'ping') {
+      sendResponse({ ok: true, url: location.href, pageType: pageType(), ready: document.readyState !== 'loading' && pageType() !== 'loading' });
+      return;
+    }
     if (msg && msg.type === 'collect') {
+      if (pageType() !== 'bookmarks') {
+        sendResponse({ ok: false, error: pageType() === 'login' ? '请先完成 X 登录，再点击同步书签' : '请切换到历史页面的书签标签后重试' });
+        return;
+      }
       (async function () {
         try {
           // 先等页面初始加载出第一批
@@ -69,8 +90,11 @@
             await autoScroll(2); // 增量：首屏即可
           }
           await sleep(1500);
-          const tweets = await getBuffer();
-          sendResponse({ ok: true, tweets: tweets });
+          if (pageType() !== 'bookmarks') {
+            throw new Error('页面已离开书签标签，请切换回书签后重试');
+          }
+          const capture = await getBuffer();
+          sendResponse({ ok: true, ...capture });
         } catch (e) {
           sendResponse({ ok: false, error: String(e && e.message || e) });
         }

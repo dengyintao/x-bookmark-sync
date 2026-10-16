@@ -56,7 +56,7 @@ class Config:
 
 def _candidates(explicit: Path | None) -> list[Path]:
     if explicit:
-        return [explicit]
+        return [Path(explicit)]
     return [
         Path.cwd() / "config.toml",
         Path.home() / ".config" / "xbm" / "config.toml",

@@ -33,7 +33,7 @@ def to_orig(url: str) -> str:
     if not url:
         return url
     parts = urllib.parse.urlsplit(url)
-    if "pbs.twimg.com" in parts.netloc:
+    if parts.hostname == "pbs.twimg.com":
         q = dict(urllib.parse.parse_qsl(parts.query))
         if q:
             q["name"] = "orig"
@@ -59,7 +59,7 @@ def pick_best(item: dict) -> tuple[str, str] | None:
     if mp4s:
         best = max(mp4s, key=lambda v: v.get("bitrate") or 0)
         return (kind, best["url"])
-    hls = [v for v in variants if (v.get("url") or "").endswith(".m3u8")]
+    hls = [v for v in variants if urllib.parse.urlsplit(v.get("url") or "").path.endswith(".m3u8")]
     if hls:
         return ("hls", hls[0]["url"])
     # 实在没有可用变体，退回原 url
@@ -105,6 +105,7 @@ class Downloader:
     # ---- 生命周期 ----
 
     def start(self) -> None:
+        self.store.recover_interrupted_media()
         n = max(1, self.cfg.download.workers)
         for i in range(n):
             t = threading.Thread(target=self._loop, name=f"xbm-dl-{i}",
@@ -151,6 +152,8 @@ class Downloader:
     def _download(self, job: dict) -> None:
         tweet_id = job["tweet_id"]
         kind, url = job["kind"], job["remote_url"]
+        if not str(tweet_id).isdigit():
+            raise ValueError("unsafe tweet_id")
         dest_dir = self.cfg.media_dir / tweet_id
         dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -193,6 +196,10 @@ class Downloader:
             headers["Range"] = f"bytes={resume_from}-"
         with self._client.stream("GET", url, headers=headers) as r:
             r.raise_for_status()
+            if resume_from and r.status_code == 206:
+                content_range = r.headers.get("content-range", "")
+                if not content_range.startswith(f"bytes {resume_from}-"):
+                    raise RuntimeError("server returned an inconsistent Content-Range")
             mode = "ab" if (resume_from and r.status_code == 206) else "wb"
             with open(part, mode) as f:
                 for chunk in r.iter_bytes(_CHUNK):

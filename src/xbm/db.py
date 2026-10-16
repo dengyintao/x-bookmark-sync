@@ -75,8 +75,9 @@ class Store:
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
         with self._lock:
-            self._conn.executescript(_SCHEMA)
+            self._conn.executescript(_SCHEMA.replace('CREATE INDEX IF NOT EXISTS idx_media_status\n    ON media_files(status, next_retry_at);', ''))
             self._migrate_media()
+            self._conn.execute('CREATE INDEX IF NOT EXISTS idx_media_status ON media_files(status, next_retry_at)')
             # tweets.url 列也是 M2 新增的
             cols = {r["name"] for r in
                     self._conn.execute("PRAGMA table_info(tweets)").fetchall()}
@@ -99,6 +100,35 @@ class Store:
             """CREATE UNIQUE INDEX IF NOT EXISTS idx_media_unique
                ON media_files(tweet_id, remote_url)"""
         )
+
+    def ingest_batch(self, tweets: list[dict[str, Any]]) -> dict[str, Any]:
+        """Commit tweet metadata, media jobs and receipt as one transaction."""
+        new_count = media_count = 0
+        now = time.time()
+        with self._lock, self._conn:
+            for tweet in tweets:
+                cur = self._conn.execute(
+                    """INSERT OR IGNORE INTO tweets
+                       (tweet_id, author, screen_name, text, created_at, synced_at, has_article, url)
+                       VALUES (?,?,?,?,?,?,?,?)""",
+                    (tweet["tweet_id"], tweet["author"], tweet["screen_name"],
+                     tweet["text"], tweet["created_at"], now, int(tweet["has_article"]), tweet["url"]),
+                )
+                new_count += cur.rowcount
+                for kind, url in tweet["jobs"]:
+                    cur = self._conn.execute(
+                        """INSERT OR IGNORE INTO media_files
+                           (tweet_id, kind, remote_url, created_at) VALUES (?,?,?,?)""",
+                        (tweet["tweet_id"], kind, url, now),
+                    )
+                    media_count += cur.rowcount
+            self._conn.execute(
+                """INSERT INTO sync_runs(started_at, finished_at, new_count, status)
+                   VALUES (?,?,?,'ok')""", (now, now, new_count),
+            )
+            total = self._conn.execute('SELECT COUNT(*) FROM tweets').fetchone()[0]
+        return {"ok": True, "new_count": new_count,
+                "dup_count": len(tweets) - new_count, "media_queued": media_count, "total": total}
 
     def seen(self, tweet_id: str) -> bool:
         with self._lock:
@@ -149,14 +179,18 @@ class Store:
             )
             self._conn.commit()
 
+    def recover_interrupted_media(self) -> None:
+        """Called once by the service, never by read/export clients."""
+        with self._lock, self._conn:
+            self._conn.execute("UPDATE media_files SET status='pending' WHERE status='downloading'")
+
     def claim_media(self, max_retries: int) -> dict[str, Any] | None:
         """原子领取一个待下载任务（pending，或可重试的 failed）。"""
         now = time.time()
         with self._lock:
             row = self._conn.execute(
                 """SELECT * FROM media_files
-                   WHERE (status='pending' OR
-                          (status='failed' AND retries<? AND next_retry_at<=?))
+                   WHERE status IN ('pending', 'failed') AND retries<? AND next_retry_at<=?
                    ORDER BY created_at ASC LIMIT 1""",
                 (max_retries, now),
             ).fetchone()

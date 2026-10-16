@@ -2,7 +2,7 @@
 
 把 X（Twitter）书签里的推文自动同步到 NAS 本地：图片、视频、长文章全文。
 
-- 路线：**Chrome 扩展被动拦截 + 服务端下载**（$0，天然免疫反爬）
+- 路线：**Chrome 扩展被动拦截 + 服务端下载**（不使用付费 API；仍受登录、限流和页面改版影响）
 - 详细设计见 [DESIGN.md](DESIGN.md)
 
 ## 快速开始
@@ -53,6 +53,21 @@ src/xbm/
 
 ## 运维要点
 
-- 部署形态：飞牛 fpk 原生应用（复用 meizang 打包模板），带 Web UI，见 DESIGN.md §9。
+- 当前部署形态：独立 Python HTTP 服务，可由 systemd 常驻运行；飞牛 FPK 与 Web UI 尚未实现。
 - 扩展与服务端走同一份 ingest 协议（`POST /api/ingest`），采集器可替换；备选采集器见 DESIGN.md §2.2（Headless 浏览器）。
 - 媒体下载走 CDN 签名直链，免登录、无 cookie 维护。
+
+## 0.2.0 本地改进
+
+- 扩展先持久保存再分批投递；NAS 不通时独立补传，弹窗显示待传数量。
+- 登录失效保留页面并暂停自动采集；历史回填有次数上限，不再宣称一定滚到底。
+- 服务端事务提交元数据与下载任务；响应丢失可安全重传。
+- 当前 API 无独立鉴权，仅适用于可信私有网络。
+- 产品设计、边界与后续工作见 [DESIGN.md](DESIGN.md)。
+
+验证命令：
+
+```sh
+python -m unittest discover -s tests -v
+node --test tests/extension.test.cjs
+```

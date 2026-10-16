@@ -1,6 +1,6 @@
-"""Web 服务（fpk 常驻）+ REST API。
+"""常驻 HTTP 服务：书签接收、状态查询。
 
-形态：飞牛 fpk 原生应用，/app/xbm 网关 + Unix Socket，不暴露 TCP 端口。
+当前部署：独立 TCP 服务。飞牛 FPK/网关集成尚未实现。
 M1 先实现最小可用：stdlib ThreadingHTTPServer + /api/ingest + /api/status。
 
 API（见 DESIGN.md §9.3）：
@@ -8,13 +8,15 @@ API（见 DESIGN.md §9.3）：
     GET  /api/status         # 服务状态 + 入库统计
     （M4 补全其余接口与前端页面）
 
-鉴权：MVP 依赖飞牛桌面登录（内网使用）；对外暴露时再移植 meizang 登录体系。
+鉴权：当前无独立认证，仅供可信私有网络；TCP 端口不受飞牛桌面登录保护。
 CORS：允许扩展跨域 POST（局域网自用）。
 """
 from __future__ import annotations
 
 import json
 import time
+import re
+from urllib.parse import urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -40,35 +42,36 @@ def _tweet_info(t: dict[str, Any]) -> dict[str, Any]:
 
 
 def ingest_payload(payload: dict[str, Any], store: Store) -> dict[str, Any]:
-    """去重入库 + 媒体入下载队列，返回统计。幂等：重复推送无副作用。"""
-    tweets = payload.get("tweets") or []
-    new_count, dup_count, media_count = 0, 0, 0
-    for t in tweets:
-        info = _tweet_info(t)
-        tid = info["tweet_id"]
-        if not tid:
-            continue
-        if store.seen(tid):
-            dup_count += 1
-            continue
-        store.record_tweet(info)
-        new_count += 1
-        # 媒体入下载队列（选最佳变体）
-        for m in (t.get("media") or []):
-            picked = pick_best(m)
-            if picked:
-                kind, url = picked
-                store.add_media(tid, kind, url)
-                media_count += 1
-    run_id = store.start_run()
-    store.finish_run(run_id, new_count)
-    return {
-        "ok": True,
-        "new_count": new_count,
-        "dup_count": dup_count,
-        "media_queued": media_count,
-        "total": store.count_tweets(),
-    }
+    if not isinstance(payload, dict) or not isinstance(payload.get("tweets", []), list):
+        raise ValueError("tweets must be an array")
+    for tweet in payload.get("tweets", []):
+        if not isinstance(tweet, dict) or not re.fullmatch(r"[0-9]{1,30}", str(tweet.get("tweet_id", ""))):
+            raise ValueError("tweet_id must contain only digits")
+        for field in ("author", "screen_name", "text", "created_at", "url"):
+            if tweet.get(field) is not None and not isinstance(tweet[field], str):
+                raise ValueError(f"{field} must be a string")
+        media = tweet.get("media", [])
+        if not isinstance(media, list):
+            raise ValueError("media must be an array")
+        for item in media:
+            if not isinstance(item, dict) or not isinstance(item.get("type", "photo"), str):
+                raise ValueError("invalid media item")
+            variants = item.get("variants", [])
+            if not isinstance(variants, list) or any(not isinstance(v, dict) for v in variants):
+                raise ValueError("invalid media variants")
+            for entry in [item] + variants:
+                if not isinstance(entry.get("url", ""), str):
+                    raise ValueError("media URL must be a string")
+            for v in variants:
+                if not isinstance(v.get("bitrate", 0), (int, float)) or not isinstance(v.get("content_type", ""), str):
+                    raise ValueError("invalid media variant")
+    prepared = []
+    for tweet in payload.get("tweets", []):
+        info = _tweet_info(tweet)
+        info["jobs"] = [picked for item in tweet.get("media", [])
+                        if (picked := pick_best(item))]
+        prepared.append(info)
+    return store.ingest_batch(prepared)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -128,7 +131,26 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"ok": False, "error": "invalid json"})
             return
         try:
+            # HTTP callers may enqueue only X CDN media, never LAN or local URLs.
+            if isinstance(payload, dict) and isinstance(payload.get("tweets"), list):
+                for tweet in payload["tweets"]:
+                    if not isinstance(tweet, dict) or not isinstance(tweet.get("media", []), list):
+                        continue  # ingest_payload supplies the validation error
+                    for item in tweet.get("media", []):
+                        if not isinstance(item, dict):
+                            continue
+                        entries = [item] + (item.get("variants") if isinstance(item.get("variants"), list) else [])
+                        for entry in entries:
+                            url = entry.get("url") if isinstance(entry, dict) else None
+                            if not isinstance(url, str) or not url:
+                                continue
+                            parts = urlsplit(url)
+                            if parts.scheme != "https" or parts.hostname not in {"pbs.twimg.com", "video.twimg.com"} or parts.username or parts.password or parts.port not in (None, 443):
+                                raise ValueError("media URL must use an HTTPS X CDN address")
             result = ingest_payload(payload, self.store)
+        except ValueError as e:
+            self._json(400, {"ok": False, "error": str(e)[:200]})
+            return
         except Exception as e:
             self._json(500, {"ok": False, "error": str(e)[:200]})
             return

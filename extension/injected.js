@@ -9,13 +9,14 @@
 
   const seen = new Set();
   const buffer = [];
+  const diagnostics = { graphqlResponses: 0, responses: 0, parsed: 0, operations: [], dataKeys: [] };
 
   function parseTweet(result) {
     try {
       // 兼容 tombstone / 包裹结构
       const r = result && result.tweet ? result.tweet : result;
       const legacy = r && r.legacy;
-      if (!legacy || !legacy.id_str) return null;
+      if (!legacy || !(legacy.id_str || r.rest_id)) return null;
       const userLegacy =
         (r.core && r.core.user_results && r.core.user_results.result &&
           r.core.user_results.result.legacy) || {};
@@ -46,13 +47,13 @@
       }).filter(Boolean);
 
       return {
-        tweet_id: legacy.id_str,
+        tweet_id: legacy.id_str || r.rest_id,
         text: legacy.full_text || '',
         created_at: legacy.created_at || '',
         author: userLegacy.name || '',
         screen_name: userLegacy.screen_name || '',
         url: 'https://x.com/' + (userLegacy.screen_name || 'i') +
-             '/status/' + legacy.id_str,
+             '/status/' + (legacy.id_str || r.rest_id),
         media: media,
         urls: urls,
         // 是否含 X Article：timeline 只给元数据，全文 M3 由扩展代抓
@@ -69,28 +70,23 @@
     try {
       const data = payload && payload.data;
       if (!data) return tweets;
-      // Bookmarks 时间线：data.bookmark_timeline.timeline.instructions
-      const timelines = [];
-      ['bookmark_timeline', 'bookmarks_timeline'].forEach(function (k) {
-        if (data[k] && data[k].timeline) timelines.push(data[k].timeline);
-      });
-      // 也兼容直接的 timeline 结构
-      if (data.timeline) timelines.push(data.timeline);
-      timelines.forEach(function (timeline) {
-        (timeline.instructions || []).forEach(function (inst) {
-          (inst.entries || []).forEach(function (entry) {
-            const content = entry.content || {};
-            const ic = content.itemContent || {};
-            const result = ic.tweet_results && ic.tweet_results.result;
-            if (!result) return;
-            const t = parseTweet(result);
-            if (t && !seen.has(t.tweet_id)) {
-              seen.add(t.tweet_id);
-              tweets.push(t);
-            }
-          });
-        });
-      });
+      // Walk timeline instructions, including nested timeline_v2 and module entries.
+      // Only tweet_results containers inside instructions may become bookmarks.
+      function readEntries(node) {
+        if (!node || typeof node !== 'object') return;
+        if (node.tweet_results && node.tweet_results.result) {
+          const t = parseTweet(node.tweet_results.result);
+          if (t && !seen.has(t.tweet_id)) { seen.add(t.tweet_id); tweets.push(t); }
+          return;
+        }
+        for (const value of Object.values(node)) readEntries(value);
+      }
+      function findTimelines(node) {
+        if (!node || typeof node !== 'object') return;
+        if (Array.isArray(node.instructions)) { readEntries(node.instructions); return; }
+        for (const value of Object.values(node)) findTimelines(value);
+      }
+      findTimelines(data);
     } catch (e) { /* 解析失败就跳过这批 */ }
     return tweets;
   }
@@ -98,7 +94,15 @@
   function handleJson(url, json) {
     // 只关心 GraphQL 响应；Bookmarks 相关优先，其他时间线也顺手收（去重兜底）
     if (url.indexOf('/graphql/') === -1) return;
+    const operation = url.split('/graphql/')[1].split('?')[0].split('/').pop();
+    diagnostics.graphqlResponses++;
+    diagnostics.operations = Array.from(new Set(diagnostics.operations.concat(operation))).slice(-10);
+    // Avoid parsing unrelated home/likes timelines even while the bookmarks page is open.
+    if (!/bookmark/i.test(operation)) return;
+    diagnostics.responses++;
+    diagnostics.dataKeys = Object.keys((json && json.data) || {}).slice(0, 20);
     const tweets = extractFromPayload(json);
+    diagnostics.parsed += tweets.length;
     if (tweets.length) {
       buffer.push.apply(buffer, tweets);
       window.postMessage({ __xbm: true, type: 'tweets', tweets: tweets }, '*');
@@ -146,14 +150,14 @@
   window.addEventListener('message', function (ev) {
     if (ev.source !== window || !ev.data || ev.data.__xbm !== true) return;
     if (ev.data.type === 'get-buffer') {
-      const out = buffer.splice(0, buffer.length);
-      // 去重：seen 已保证，但 splice 前可能有重复推送，顺手再滤一次
+      const out = buffer.slice();
+      // 保留页面缓冲：本地持久化失败时仍可再次读取。
       const uniq = [];
       const local = new Set();
       out.forEach(function (t) {
         if (!local.has(t.tweet_id)) { local.add(t.tweet_id); uniq.push(t); }
       });
-      window.postMessage({ __xbm: true, type: 'buffer', tweets: uniq }, '*');
+      window.postMessage({ __xbm: true, type: 'buffer', tweets: uniq, diagnostics: diagnostics }, '*');
     }
     if (ev.data.type === 'ping') {
       window.postMessage({ __xbm: true, type: 'pong' }, '*');
