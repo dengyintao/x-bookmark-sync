@@ -1,15 +1,6 @@
-"""常驻 HTTP 服务：书签接收、状态查询。
+"""HTTP ingestion service and bundled NAS management dashboard.
 
-当前部署：独立 TCP 服务。飞牛 FPK/网关集成尚未实现。
-M1 先实现最小可用：stdlib ThreadingHTTPServer + /api/ingest + /api/status。
-
-API（见 DESIGN.md §9.3）：
-    POST /api/ingest         # {tweets:[...], source, captured_at} → 去重入库
-    GET  /api/status         # 服务状态 + 入库统计
-    （M4 补全其余接口与前端页面）
-
-鉴权：当前无独立认证，仅供可信私有网络；TCP 端口不受飞牛桌面登录保护。
-CORS：允许扩展跨域 POST（局域网自用）。
+For trusted private networks; no independent authentication.
 """
 from __future__ import annotations
 
@@ -71,7 +62,11 @@ def ingest_payload(payload: dict[str, Any], store: Store) -> dict[str, Any]:
         info["jobs"] = [picked for item in tweet.get("media", [])
                         if (picked := pick_best(item))]
         prepared.append(info)
-    return store.ingest_batch(prepared)
+    source = payload.get("source", "extension")
+    captured_at = payload.get("captured_at", "")
+    if not isinstance(source, str) or not isinstance(captured_at, str):
+        raise ValueError("source and captured_at must be strings")
+    return store.ingest_batch(prepared, source[:100], captured_at[:100])
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -101,6 +96,9 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        from . import web
+        if web.get(self):
+            return
         if self.path == "/api/status":
             self._json(200, {
                 "ok": True,
@@ -115,6 +113,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(404, {"ok": False, "error": "not found"})
 
     def do_POST(self):
+        from . import web
+        if web.post(self):
+            return
         if self.path != "/api/ingest":
             self._json(404, {"ok": False, "error": "not found"})
             return

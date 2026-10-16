@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>X 书签库</title>
+    <link rel="icon" href="/icon.svg" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="stylesheet" href="/style.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <aside>
+      <a class="brand" href="#bookmarks"
+        ><img src="/icon.svg" alt="" /><span
+          >书签库<small>X BOOKMARK SYNC</small></span
+        ></a
+      >
+      <div class="nav-label">我的收藏</div>
+      <nav aria-label="主要导航">
+        <a href="#bookmarks" data-view="bookmarks">▤ <span>全部书签</span></a
+        ><a href="#runs" data-view="runs">↻ <span>同步记录</span></a
+        ><a href="#downloads" data-view="downloads">↓ <span>下载队列</span></a>
+      </nav>
+      <div class="aside-note">
+        <span id="connection" class="dot">正在连接</span>
+        <p>收藏在 X，留存在这里。</p>
+        <small>个人 NAS · 本地存储</small>
+      </div>
+    </aside>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">YOUR PERSONAL ARCHIVE</p>
+          <h1 id="title">全部书签</h1>
+          <p id="subtitle">值得保存的内容，随时回看。</p>
+        </div>
+        <button id="refresh" class="outline">↻ 刷新</button>
+      </header>
+      <div id="notice" role="status" hidden></div>
+      <section class="stats" aria-label="服务概览">
+        <div>
+          <span>已保存书签</span><strong id="count-tweets">—</strong
+          ><small>NAS 已确认入库</small>
+        </div>
+        <div>
+          <span>媒体已下载</span><strong id="count-done">—</strong
+          ><small id="completion">等待状态</small>
+        </div>
+        <div>
+          <span>正在下载 / 等待</span><strong id="count-pending">—</strong
+          ><small>后台自动处理</small>
+        </div>
+        <div>
+          <span>下载失败</span><strong id="count-failed">—</strong
+          ><small>可查看原因并重试</small>
+        </div>
+      </section>
+      <section class="workspace">
+        <div class="tools">
+          <form id="search-form">
+            <label class="sr-only" for="search">搜索书签</label
+            ><input
+              id="search"
+              type="search"
+              placeholder="搜索正文、作者或用户名…"
+              maxlength="300"
+            /><button type="submit">搜索</button>
+          </form>
+          <label for="filter" class="sr-only">筛选</label
+          ><select id="filter">
+            <option value="">全部类型</option></select
+          ><span id="total"></span>
+        </div>
+        <p id="view-note" class="view-note"></p>
+        <div id="content" aria-live="polite"></div>
+        <footer class="pagination">
+          <button id="prev" class="outline">← 上一页</button
+          ><span id="page"></span
+          ><button id="next" class="outline">下一页 →</button>
+        </footer>
+      </section>
+      <footer class="main-footer">
+        X BOOKMARK SYNC
+        <span>媒体保存在你的 NAS · 页面每 3 秒更新任务状态</span>
+      </footer>
+    </main>
+    <dialog id="detail">
+      <div class="dialog-heading">
+        <h2>书签详情</h2>
+        <button id="close-detail" class="outline" aria-label="关闭详情">
+          ✕
+        </button>
+      </div>
+      <div id="detail-body"></div>
+    </dialog>
+  </body>
+</html>

@@ -172,7 +172,7 @@ class Downloader:
                                      final.stat().st_size)
                 self._maybe_write_meta(tweet_id)
                 return
-            self._download_http(url, final)
+            self._download_http(url, final, job["id"])
 
         size = final.stat().st_size
         if size == 0:
@@ -188,7 +188,7 @@ class Downloader:
                 return i
         return 1
 
-    def _download_http(self, url: str, final: Path) -> None:
+    def _download_http(self, url: str, final: Path, media_id: int | None = None) -> None:
         part = final.with_suffix(final.suffix + ".part")
         resume_from = part.stat().st_size if part.exists() else 0
         headers = {}
@@ -201,9 +201,24 @@ class Downloader:
                 if not content_range.startswith(f"bytes {resume_from}-"):
                     raise RuntimeError("server returned an inconsistent Content-Range")
             mode = "ab" if (resume_from and r.status_code == 206) else "wb"
+            received = resume_from if mode == "ab" else 0
+            total = int(r.headers.get("content-length", 0)) + received
+            # Decoded HTTP bodies can differ from Content-Length.
+            if r.headers.get("content-encoding"):
+                total = 0
+            last_at, last_bytes = time.monotonic(), received
+            if media_id is not None:
+                self.store.update_progress(media_id, received, total, 0)
             with open(part, mode) as f:
                 for chunk in r.iter_bytes(_CHUNK):
                     f.write(chunk)
+                    received += len(chunk)
+                    now = time.monotonic()
+                    if media_id is not None and now - last_at >= 0.5:
+                        self.store.update_progress(media_id, received, total, (received - last_bytes) / (now - last_at))
+                        last_at, last_bytes = now, received
+            if media_id is not None:
+                self.store.update_progress(media_id, received, total, 0)
         part.rename(final)
 
     def _download_hls(self, url: str, final: Path) -> None:

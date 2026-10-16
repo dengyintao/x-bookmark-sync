@@ -1,0 +1,5 @@
+#!/bin/sh
+if ! systemctl cat xbm.service >/dev/null 2>&1; then
+ echo "请先按项目说明部署 xbm.service，再安装桌面入口包。" > "$TRIM_TEMP_LOGFILE"
+ exit 1
+fi

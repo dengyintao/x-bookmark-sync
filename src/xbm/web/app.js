@@ -1,0 +1,457 @@
+"use strict";
+const $ = (id) => document.getElementById(id);
+const labels = {
+  pending: "等待下载",
+  downloading: "正在下载",
+  done: "已下载",
+  failed: "下载失败",
+  ok: "已接收",
+  running: "运行中",
+  photo: "图片",
+  video: "视频",
+  gif: "动图",
+  hls: "视频",
+};
+const views = {
+  bookmarks: {
+    title: "全部书签",
+    subtitle: "值得保存的内容，随时回看。",
+    note: "从浏览器插件同步到 NAS 的书签。点击详情查看正文和已下载媒体。",
+    filters: [
+      ["", "全部类型"],
+      ["photo", "图片"],
+      ["video", "视频"],
+      ["gif", "动图"],
+      ["hls", "HLS 视频"],
+      ["text", "纯文字"],
+    ],
+  },
+  runs: {
+    title: "同步记录",
+    subtitle: "每一次接收，都有迹可循。",
+    note: "这里显示 NAS 已收到的同步批次，一次插件同步可能拆成多个批次。浏览器未送达的任务请在插件中查看。",
+    filters: [],
+  },
+  downloads: {
+    title: "下载队列",
+    subtitle: "下载进度、等待重试和失败原因，一目了然。",
+    note: "进度按已传输字节计算；无法获取总大小或 HLS 转码时不显示百分比。自动重试有退避等待。",
+    filters: [
+      ["", "全部状态"],
+      ["downloading", "正在下载"],
+      ["pending", "等待下载"],
+      ["failed", "下载失败"],
+      ["done", "已下载"],
+    ],
+  },
+};
+let view = "bookmarks",
+  offset = 0,
+  total = 0,
+  items = [],
+  generation = 0,
+  loading = false;
+const limit = 24;
+function el(tag, text, className) {
+  const n = document.createElement(tag);
+  if (text !== undefined) n.textContent = text;
+  if (className) n.className = className;
+  return n;
+}
+function badge(value) {
+  return el("span", labels[value] || value, "badge " + value);
+}
+function date(value) {
+  if (!value) return "—";
+  const d = new Date(typeof value === "number" ? value * 1000 : value);
+  return Number.isNaN(d.getTime())
+    ? String(value)
+    : d.toLocaleString("zh-CN", { hour12: false });
+}
+function bytes(n) {
+  n = Number(n) || 0;
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i++;
+  }
+  return `${n.toFixed(i ? 1 : 0)} ${units[i]}`;
+}
+async function api(path, options = {}) {
+  const r = await fetch(path, {
+    ...options,
+    signal: AbortSignal.timeout(12000),
+    cache: "no-store",
+  });
+  const data = await r.json();
+  if (!r.ok || !data.ok)
+    throw new Error(data.error || data.message || `HTTP ${r.status}`);
+  return data;
+}
+function notice(message = "") {
+  $("notice").hidden = !message;
+  $("notice").textContent = message;
+}
+async function status() {
+  try {
+    const data = await api("/api/status");
+    const m = data.media;
+    $("count-tweets").textContent = data.tweets.toLocaleString();
+    $("count-done").textContent = m.done.toLocaleString();
+    $("count-pending").textContent = `${m.downloading} / ${m.pending}`;
+    $("count-failed").textContent = m.failed;
+    const count = Object.values(m).reduce((a, b) => a + b, 0);
+    $("completion").textContent = count
+      ? `共 ${count} 个媒体 · 完成 ${Math.round((m.done / count) * 100)}%`
+      : "暂无媒体任务";
+    $("connection").textContent = "服务已连接";
+    $("connection").className = "dot online";
+  } catch (e) {
+    $("connection").textContent = "连接中断";
+    $("connection").className = "dot offline";
+    notice("无法连接 NAS，当前显示可能是旧数据。" + e.message);
+  }
+}
+function author(item) {
+  const n = el("div", undefined, "author");
+  n.append(
+    el("span", (item.author || item.screen_name || "X").slice(0, 1), "avatar"),
+  );
+  const text = el("div");
+  text.append(
+    el("strong", item.author || item.screen_name || "未知作者"),
+    el("small", item.screen_name ? "@" + item.screen_name : "X 书签"),
+  );
+  n.append(text);
+  return n;
+}
+function original(item) {
+  const a = el("a", "在 X 查看 ↗");
+  a.href = "https://x.com/i/status/" + encodeURIComponent(item.tweet_id);
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  return a;
+}
+function bookmarks() {
+  const grid = el("div", undefined, "grid");
+  for (const item of items) {
+    const card = el("article", undefined, "card");
+    card.append(
+      author(item),
+      el("p", item.text || "这条书签没有正文。", "text"),
+    );
+    const foot = el("div", undefined, "card-foot");
+    const media = item.media || [];
+    if (media.length) {
+      foot.append(
+        badge(media[0].kind),
+        el(
+          "span",
+          `${media.filter((m) => m.status === "done").length}/${media.length} 已下载`,
+          "badge",
+        ),
+      );
+    } else foot.append(el("span", "纯文字", "badge"));
+    foot.append(el("small", date(item.synced_at)));
+    card.append(foot);
+    const button = el("button", "查看详情 →");
+    button.addEventListener("click", () => detail(item));
+    card.append(button);
+    grid.append(card);
+  }
+  return grid;
+}
+function detail(item) {
+  const body = $("detail-body");
+  body.replaceChildren(
+    author(item),
+    el("p", item.text || "暂无正文", "text"),
+    original(item),
+    el("p", "入库时间：" + date(item.synced_at), "view-note"),
+  );
+  for (const m of item.media || []) {
+    if (m.status === "done") {
+      if (m.kind === "photo") {
+        const img = el("img");
+        img.src = "/api/media/" + m.id;
+        img.alt = "书签图片";
+        img.loading = "lazy";
+        img.addEventListener("error", () => {
+          img.replaceWith(
+            el("p", "文件不可用，请检查 NAS 存储目录。", "media-placeholder"),
+          );
+        });
+        body.append(img);
+      } else {
+        const video = el("video");
+        video.controls = true;
+        video.preload = "metadata";
+        video.src = "/api/media/" + m.id;
+        body.append(video);
+      }
+    } else
+      body.append(
+        el(
+          "p",
+          (labels[m.kind] || m.kind) +
+            " · " +
+            (labels[m.status] || m.status) +
+            (m.error ? " · " + m.error : ""),
+          "media-placeholder",
+        ),
+      );
+  }
+  $("detail").showModal();
+}
+function table(headings) {
+  const wrap = el("div", undefined, "table-wrap"),
+    t = el("table"),
+    head = el("thead"),
+    row = el("tr");
+  headings.forEach((h) => row.append(el("th", h)));
+  head.append(row);
+  const body = el("tbody");
+  t.append(head, body);
+  wrap.append(t);
+  return [wrap, body];
+}
+function runs() {
+  const [wrap, body] = table([
+    "接收时间",
+    "来源 / 状态",
+    "收到 / 新增 / 重复",
+    "媒体入队",
+  ]);
+  for (const item of items) {
+    const row = el("tr"),
+      source = el("td");
+    source.append(
+      badge(item.status),
+      el("small", item.source === "legacy" ? "历史记录" : item.source || "—"),
+    );
+    if (item.error) source.append(el("small", item.error, "error"));
+    const when = el("td", date(item.started_at));
+    if (item.captured_at)
+      when.append(el("small", "浏览器采集：" + date(item.captured_at)));
+    row.append(
+      when,
+      source,
+      el(
+        "td",
+        `${item.received_count ?? "—"} / ${item.new_count ?? "—"} / ${item.dup_count ?? "—"}`,
+      ),
+      el("td", item.media_queued ?? "—"),
+    );
+    body.append(row);
+  }
+  return wrap;
+}
+function downloads() {
+  const [wrap, body] = table([
+    "媒体",
+    "下载状态",
+    "进度 / 大小",
+    "重试 / 错误",
+    "操作",
+  ]);
+  for (const item of items) {
+    const row = el("tr"),
+      who = el("td", item.author || item.screen_name || "未知作者");
+    who.append(
+      el("small", `${labels[item.kind] || item.kind} · ${item.tweet_id}`),
+    );
+    const state = el("td");
+    state.append(badge(item.status));
+    const progress = el("td", undefined, "progress");
+    if (item.status === "downloading") {
+      const p = el("progress");
+      p.max = item.total_bytes || 1;
+      if (item.total_bytes) p.value = Math.min(item.bytes, item.total_bytes);
+      p.setAttribute("aria-label", "下载进度");
+      progress.append(
+        p,
+        el(
+          "span",
+          item.total_bytes
+            ? `${Math.floor(Math.min(item.bytes / item.total_bytes, 1) * 100)}% · ${bytes(item.bytes)} / ${bytes(item.total_bytes)}`
+            : `${bytes(item.bytes)} · 总大小未知`,
+        ),
+      );
+      const speed = Date.now() / 1000 - item.updated_at < 5 ? item.speed : 0;
+      progress.append(el("small", speed ? bytes(speed) + "/s" : "正在处理…"));
+    } else
+      progress.append(
+        el(
+          "span",
+          item.status === "done"
+            ? bytes(item.bytes)
+            : `${bytes(item.bytes)} 已传输`,
+        ),
+      );
+    const error = el("td", `已重试 ${item.retries} 次`);
+    if (item.error) error.append(el("small", item.error, "error"));
+    if (item.next_retry_at > Date.now() / 1000)
+      error.append(el("small", "下次尝试：" + date(item.next_retry_at)));
+    const action = el("td");
+    if (item.status === "failed" || item.status === "pending") {
+      const b = el("button", item.error ? "立即重试" : "重新排队", "outline");
+      b.addEventListener("click", async () => {
+        b.disabled = true;
+        try {
+          await api(`/api/downloads/${item.id}/retry`, {
+            method: "POST",
+            headers: { "X-XBM-Action": "retry" },
+          });
+          notice("已加入重试队列，后台将在数秒内开始处理。");
+          await load();
+        } catch (e) {
+          notice(e.message);
+          b.disabled = false;
+        }
+      });
+      action.append(b);
+    } else if (item.status === "done") {
+      const a = el("a", "打开文件 ↗");
+      a.href = "/api/media/" + item.id;
+      a.target = "_blank";
+      a.rel = "noopener";
+      action.append(a);
+    }
+    row.append(who, state, progress, error, action);
+    body.append(row);
+  }
+  return wrap;
+}
+function render() {
+  if (!items.length) {
+    const empty = el("div", undefined, "empty");
+    empty.append(
+      el(
+        "strong",
+        view === "bookmarks"
+          ? "暂无符合条件的书签"
+          : view === "runs"
+            ? "还没有同步记录"
+            : "暂无符合条件的下载任务",
+      ),
+      el(
+        "span",
+        view === "bookmarks"
+          ? "在浏览器打开 X 书签页，通过插件同步后即可在这里查看。"
+          : "任务到达后会自动显示在这里。",
+      ),
+    );
+    $("content").replaceChildren(empty);
+  } else
+    $("content").replaceChildren(
+      view === "bookmarks"
+        ? bookmarks()
+        : view === "runs"
+          ? runs()
+          : downloads(),
+    );
+  $("total").textContent = `共 ${total} 条`;
+  $("page").textContent = total
+    ? `${Math.floor(offset / limit) + 1} / ${Math.ceil(total / limit)}`
+    : "0 / 0";
+  $("prev").disabled = offset === 0;
+  $("next").disabled = offset + limit >= total;
+}
+async function load() {
+  const token = ++generation;
+  loading = true;
+  document.body.classList.add("busy");
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  if (view === "bookmarks") {
+    params.set("q", $("search").value);
+    params.set("kind", $("filter").value);
+  }
+  if (view === "downloads") params.set("status", $("filter").value);
+  try {
+    const data = await api(`/api/${view}?${params}`);
+    if (token !== generation) return;
+    items = data.items;
+    total = data.total;
+    if (offset && offset >= total) {
+      offset = Math.max(0, Math.ceil(total / limit) - 1) * limit;
+      return await load();
+    }
+    render();
+  } catch (e) {
+    if (token === generation) notice("加载失败：" + e.message);
+  } finally {
+    if (token === generation) {
+      loading = false;
+      document.body.classList.remove("busy");
+    }
+  }
+}
+function navigate() {
+  $("content").replaceChildren(el("div", "正在加载…", "empty"));
+  view = location.hash.slice(1);
+  if (!views[view]) view = "bookmarks";
+  generation++;
+  offset = 0;
+  const config = views[view];
+  $("title").textContent = config.title;
+  $("subtitle").textContent = config.subtitle;
+  $("view-note").textContent = config.note;
+  document.querySelectorAll("[data-view]").forEach((a) => {
+    a.classList.toggle("active", a.dataset.view === view);
+    if (a.dataset.view === view) a.setAttribute("aria-current", "page");
+    else a.removeAttribute("aria-current");
+  });
+  $("search-form").hidden = view !== "bookmarks";
+  $("filter").hidden = !config.filters.length;
+  $("filter").replaceChildren(
+    ...config.filters.map(([v, t]) => {
+      const o = el("option", t);
+      o.value = v;
+      return o;
+    }),
+  );
+  notice();
+  load();
+}
+$("search-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  offset = 0;
+  notice();
+  load();
+});
+$("filter").addEventListener("change", () => {
+  offset = 0;
+  load();
+});
+$("prev").addEventListener("click", () => {
+  offset = Math.max(0, offset - limit);
+  load();
+});
+$("next").addEventListener("click", () => {
+  offset += limit;
+  load();
+});
+$("refresh").addEventListener("click", () => {
+  notice();
+  status();
+  load();
+});
+$("close-detail").addEventListener("click", () => $("detail").close());
+window.addEventListener("hashchange", navigate);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    status();
+    load();
+  }
+});
+navigate();
+status();
+setInterval(() => {
+  if (document.hidden) return;
+  status();
+  if (view !== "bookmarks" && !loading) load();
+}, 3000);

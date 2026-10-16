@@ -1,0 +1,9 @@
+#!/bin/sh
+# Launcher package manages the existing systemd service; it never owns bookmark data.
+case "$1" in
+ start) systemctl start xbm.service ;;
+ stop) systemctl stop xbm.service ;;
+ status) systemctl is-active --quiet xbm.service || exit 3 ;;
+ restart) systemctl restart xbm.service ;;
+ *) exit 1 ;;
+esac

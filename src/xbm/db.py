@@ -64,6 +64,9 @@ _MIGRATE_MEDIA = [
     ("error", "TEXT DEFAULT ''"),
     ("next_retry_at", "REAL DEFAULT 0"),
     ("created_at", "REAL"),
+    ("total_bytes", "INTEGER DEFAULT 0"),
+    ("speed", "REAL DEFAULT 0"),
+    ("updated_at", "REAL DEFAULT 0"),
 ]
 
 
@@ -83,6 +86,12 @@ class Store:
                     self._conn.execute("PRAGMA table_info(tweets)").fetchall()}
             if "url" not in cols:
                 self._conn.execute("ALTER TABLE tweets ADD COLUMN url TEXT DEFAULT ''")
+            cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(sync_runs)")}
+            for name, ddl in [("source", "TEXT DEFAULT 'legacy'"), ("received_count", "INTEGER"),
+                              ("dup_count", "INTEGER"), ("media_queued", "INTEGER"),
+                              ("captured_at", "TEXT DEFAULT ''")]:
+                if name not in cols:
+                    self._conn.execute(f"ALTER TABLE sync_runs ADD COLUMN {name} {ddl}")
             self._conn.commit()
 
     def _migrate_media(self) -> None:
@@ -101,7 +110,7 @@ class Store:
                ON media_files(tweet_id, remote_url)"""
         )
 
-    def ingest_batch(self, tweets: list[dict[str, Any]]) -> dict[str, Any]:
+    def ingest_batch(self, tweets: list[dict[str, Any]], source: str = "extension", captured_at: str = "") -> dict[str, Any]:
         """Commit tweet metadata, media jobs and receipt as one transaction."""
         new_count = media_count = 0
         now = time.time()
@@ -123,8 +132,10 @@ class Store:
                     )
                     media_count += cur.rowcount
             self._conn.execute(
-                """INSERT INTO sync_runs(started_at, finished_at, new_count, status)
-                   VALUES (?,?,?,'ok')""", (now, now, new_count),
+                """INSERT INTO sync_runs(started_at, finished_at, new_count, status,
+                   source, received_count, dup_count, media_queued, captured_at)
+                   VALUES (?,?,?,'ok',?,?,?,?,?)""",
+                (now, now, new_count, source, len(tweets), len(tweets) - new_count, media_count, captured_at),
             )
             total = self._conn.execute('SELECT COUNT(*) FROM tweets').fetchone()[0]
         return {"ok": True, "new_count": new_count,
@@ -197,7 +208,7 @@ class Store:
             if not row:
                 return None
             self._conn.execute(
-                "UPDATE media_files SET status='downloading', error='' WHERE id=?",
+                "UPDATE media_files SET status='downloading', error='', speed=0 WHERE id=?",
                 (row["id"],),
             )
             self._conn.commit()
@@ -207,9 +218,9 @@ class Store:
         with self._lock:
             self._conn.execute(
                 """UPDATE media_files
-                   SET status='done', local_path=?, bytes=?, error=''
+                   SET status='done', local_path=?, bytes=?, total_bytes=?, speed=0, error=''
                    WHERE id=?""",
-                (local_path, size, media_id),
+                (local_path, size, size, media_id),
             )
             self._conn.commit()
 
@@ -227,7 +238,7 @@ class Store:
                 next_at = time.time() + min(3600, 60 * (2 ** (retries - 1)))
             self._conn.execute(
                 """UPDATE media_files
-                   SET status=?, retries=?, error=?, next_retry_at=?
+                   SET status=?, retries=?, error=?, next_retry_at=?, speed=0
                    WHERE id=?""",
                 (status, retries, error[:500], next_at, media_id),
             )
@@ -304,6 +315,69 @@ class Store:
             else:
                 break
         return n
+
+    def update_progress(self, media_id: int, received: int, total: int, speed: float) -> None:
+        with self._lock, self._conn:
+            self._conn.execute("""UPDATE media_files SET bytes=?, total_bytes=?, speed=?, updated_at=?
+                                  WHERE id=? AND status='downloading'""",
+                               (received, total, speed, time.time(), media_id))
+
+    def list_bookmarks(self, query: str = "", kind: str = "", limit: int = 24, offset: int = 0) -> dict:
+        where, args = [], []
+        if query:
+            where.append("(t.text LIKE ? ESCAPE '\\' OR t.author LIKE ? ESCAPE '\\' OR t.screen_name LIKE ? ESCAPE '\\')")
+            escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            args += ["%" + escaped + "%"] * 3
+        if kind == "text":
+            where.append("NOT EXISTS (SELECT 1 FROM media_files m WHERE m.tweet_id=t.tweet_id)")
+        elif kind:
+            where.append("EXISTS (SELECT 1 FROM media_files m WHERE m.tweet_id=t.tweet_id AND m.kind=?)")
+            args.append(kind)
+        clause = " WHERE " + " AND ".join(where) if where else ""
+        with self._lock:
+            total = self._conn.execute("SELECT COUNT(*) FROM tweets t" + clause, args).fetchone()[0]
+            rows = self._conn.execute("SELECT t.* FROM tweets t" + clause +
+                                      " ORDER BY t.synced_at DESC, t.rowid DESC LIMIT ? OFFSET ?",
+                                      args + [limit, offset]).fetchall()
+            items = []
+            for row in rows:
+                item = dict(row)
+                item["media"] = [dict(m) for m in self._conn.execute(
+                    "SELECT id,kind,status,bytes,total_bytes,error FROM media_files WHERE tweet_id=? ORDER BY id",
+                    (row["tweet_id"],)).fetchall()]
+                items.append(item)
+        return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+    def list_runs(self, limit: int = 24, offset: int = 0) -> dict:
+        with self._lock:
+            total = self._conn.execute("SELECT COUNT(*) FROM sync_runs").fetchone()[0]
+            items = [dict(r) for r in self._conn.execute(
+                "SELECT * FROM sync_runs ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset))]
+        return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+    def list_downloads(self, status: str = "", limit: int = 24, offset: int = 0) -> dict:
+        clause = " WHERE m.status=?" if status else ""
+        args = [status] if status else []
+        with self._lock:
+            total = self._conn.execute("SELECT COUNT(*) FROM media_files m" + clause, args).fetchone()[0]
+            items = [dict(r) for r in self._conn.execute(
+                """SELECT m.id,m.tweet_id,m.kind,m.status,m.bytes,m.total_bytes,m.speed,m.updated_at,
+                          m.retries,m.error,m.next_retry_at,m.created_at,t.author,t.screen_name
+                   FROM media_files m LEFT JOIN tweets t ON t.tweet_id=m.tweet_id""" + clause +
+                " ORDER BY CASE m.status WHEN 'downloading' THEN 0 WHEN 'failed' THEN 1 WHEN 'pending' THEN 2 ELSE 3 END, m.id DESC LIMIT ? OFFSET ?",
+                args + [limit, offset])]
+        return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+    def retry_media(self, media_id: int) -> bool:
+        with self._lock, self._conn:
+            cur = self._conn.execute("""UPDATE media_files SET status='pending', retries=0,
+                error='',next_retry_at=0,speed=0 WHERE id=? AND status IN ('pending','failed')""", (media_id,))
+        return cur.rowcount > 0
+
+    def get_media(self, media_id: int) -> dict | None:
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM media_files WHERE id=?", (media_id,)).fetchone()
+        return dict(row) if row else None
 
     def close(self) -> None:
         with self._lock:
