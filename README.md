@@ -53,7 +53,7 @@ src/xbm/
 
 ## 运维要点
 
-- 当前部署形态：独立 Python HTTP 服务，可由 systemd 常驻运行；0.3.0 内置 Web 管理界面，飞牛入口包连接已部署的服务。
+- 当前部署形态：独立 Python HTTP 服务，可由 systemd 常驻运行；内置 Web 管理界面，0.4.1 起提供独立飞牛安装包。
 - 扩展与服务端走同一份 ingest 协议（`POST /api/ingest`），采集器可替换；备选采集器见 DESIGN.md §2.2（Headless 浏览器）。
 - 媒体下载走 CDN 签名直链，免登录、无 cookie 维护。
 
@@ -82,11 +82,15 @@ node --test tests/extension.test.cjs
 
 界面无需外部 CDN 或构建工具，随 Python 包分发。数据库升级自动补列并保留原数据；升级生产服务前请备份 `.xbm/xbm.db`。
 
-### 飞牛桌面入口包
+### 飞牛独立安装包（0.4.1 起）
 
-`packaging/fnos/` 是连接既有 `xbm.service` 的入口包，并不是独立安装器；先部署 Python 服务，再运行 `fnpack build -d packaging/fnos`，安装生成的 `x-bookmark-sync.fpk`。桌面显示“X 书签库”，点击打开本机 8765 端口；应用中心启停操作对应 systemd 服务。卸载入口包保留项目和书签数据。
+从 GitHub Release 下载 `x-bookmark-sync-0.4.1.fpk`，在飞牛应用中心手动安装并启动，点击桌面“X 书签库”打开 8765 端口。支持 x86_64 fnOS 1.2.0401+；包内包含 Python 运行时、Web 服务、gallery-dl 和 FFmpeg，无需预装 Python、Docker、systemd 服务，也不需要在安装时联网下载依赖。
 
-入口依赖 NAS 地址可直连 8765 端口，不通过飞牛登录网关鉴权；仅在原有可信私有网络使用。CLI 启动方式仍可用。
+应用使用专用用户运行。配置在 `TRIM_PKGETC/config.toml`，书签和媒体在 `TRIM_PKGVAR/data`，迁移备份在 `TRIM_PKGVAR/migrations`，日志在 `TRIM_PKGVAR/server.log`。升级保留配置和数据；卸载脚本不主动删除它们，卸载时仍应选择系统的“保留应用数据”并提前备份。
+
+旧桌面入口包/手工部署用户：先备份原配置和书签，停止原 `xbm.service` 释放 8765 端口，再安装/升级 FPK。新包不会自动复制或接管旧目录；将旧数据复制到新数据目录并赋予应用用户权限后再启动，或在配置中指定应用用户可访问的旧目录。旧服务仍存在时不要同时启动。扩展 NAS 地址不变。
+
+服务直接提供 HTTP，不通过飞牛登录网关；请在可信私有网络使用。
 
 ## 按登录的 X 账户分库（0.3.1 / 扩展 0.2.4）
 
@@ -138,13 +142,15 @@ backup_dir = "/path/to/ownership-backups"
 
 GitHub Actions 在 main 推送、PR 或手动触发时执行服务端和扩展行为测试，随后构建并上传 `xbm-release-assets` Artifact（保留 30 天）。推送 `v{项目版本}` 标签会在相同检查通过后自动创建正式 GitHub Release，附带 FPK、Python wheel、插件 ZIP、源码 tar.gz 和 SHA256SUMS。
 
-版本标签、pyproject.toml 和 FPK manifest 必须一致；扩展 ZIP 使用独立的 manifest 版本。fnpack 固定为官方 1.2.3，下载后验证 SHA256。FPK 当前是已部署 xbm.service 的桌面入口包，不能替代首次服务端安装。
+版本标签、pyproject.toml 和 FPK manifest 必须一致；扩展 ZIP 使用独立的 manifest 版本。fnpack 固定为官方 1.2.3，下载后验证 SHA256。FPK 在 Ubuntu 22.04 x86_64 构建并冻结 Python 运行环境，构建阶段验证独立启停、升级保留数据和 HTTP 界面。
 
 本地复现：
 
 ```sh
 python3 -m pip install "setuptools>=61" wheel
-python3 scripts/build_release.py --fnpack /path/to/fnpack --tag v0.4.0
+python3 -m pip install . pyinstaller==6.16.0 imageio-ffmpeg==0.6.0 wheel
+# Linux x86_64（推荐使用 Actions）
+python3 scripts/build_release.py --fnpack /path/to/fnpack --tag v0.4.1
 # 所有产物位于 dist/release/
 ```
 

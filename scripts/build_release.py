@@ -7,6 +7,7 @@ import gzip
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import shutil
 import subprocess
@@ -47,6 +48,9 @@ def verify_fpk(path, manifest):
         if not package.getmember('cmd/main').mode & 0o111:
             raise ValueError('FPK lifecycle script is not executable')
         with tarfile.open(fileobj=package.extractfile('app.tgz'), mode='r:gz') as payload:
+            for required in ('server/xbm', 'ffmpeg', 'gallery-dl'):
+                if not payload.getmember(required).mode & 0o111:
+                    raise ValueError('FPK standalone executable missing: ' + required)
             ui = json.loads(payload.extractfile('ui/config').read())
             if manifest['desktop_applaunchname'] not in ui['.url']:
                 raise ValueError('FPK desktop entry is missing')
@@ -66,6 +70,21 @@ def build(fnpack, output, tag=''):
         staging = Path(tmp)
         application = staging/'fpk-source'
         shutil.copytree(ROOT/'packaging/fnos', application)
+        if platform.system() != 'Linux' or platform.machine() != 'x86_64':
+            raise RuntimeError('Standalone FPK must be built on Linux x86_64 (use GitHub Actions)')
+        subprocess.run([sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean',
+            '--onedir', '--name', 'xbm', '--distpath', str(staging/'frozen'),
+            '--workpath', str(staging/'pyinstaller'), '--specpath', str(staging),
+            '--collect-all', 'xbm', '--collect-all', 'twikit', '--collect-all', 'gallery_dl',
+            str(ROOT/'packaging/fnos/app/entry.py')], cwd=ROOT, check=True)
+        shutil.copytree(staging/'frozen/xbm', application/'app/server')
+        import imageio_ffmpeg
+        shutil.copy2(imageio_ffmpeg.get_ffmpeg_exe(), application/'app/ffmpeg')
+        (application/'app/ffmpeg').chmod(0o755)
+        subprocess.run([str(application/'app/server/xbm'), '--help'], check=True)
+        subprocess.run([str(application/'app/server/xbm'), '--gallery-dl', '--version'], check=True)
+        subprocess.run([str(application/'app/ffmpeg'), '-version'], check=True)
+        subprocess.run([sys.executable, str(ROOT/'scripts/test_fpk.py'), str(application)], check=True)
         subprocess.run([str(fnpack.resolve()), 'build', '-d', str(application)], cwd=staging, check=True)
         fpk = staging/(manifest['appname']+'.fpk')
         verify_fpk(fpk, manifest)

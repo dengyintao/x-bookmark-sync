@@ -1,2 +1,9 @@
 #!/bin/sh
-exit 0
+set -eu
+: "${TRIM_PKGETC:?}" "${TRIM_PKGVAR:?}" "${TRIM_APPDEST:?}"
+mkdir -p "$TRIM_PKGETC" "$TRIM_PKGVAR/data" "$TRIM_PKGVAR/migrations"
+if [ ! -f "$TRIM_PKGETC/config.toml" ]; then
+    # JSON strings are valid TOML basic strings, including unusual path characters.
+    "$TRIM_APPDEST/server/xbm" --write-fnos-config "$TRIM_PKGETC/config.toml" "$TRIM_PKGVAR"
+    chmod 600 "$TRIM_PKGETC/config.toml"
+fi

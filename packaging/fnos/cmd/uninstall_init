@@ -1,2 +1,4 @@
 #!/bin/sh
-exit 0
+set -eu
+"$(dirname "$0")/main" stop
+# Never remove user data or configuration in lifecycle scripts.

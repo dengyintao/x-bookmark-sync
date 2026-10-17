@@ -1,16 +1,14 @@
-X Bookmark Sync 0.4.0：个人 X 书签同步与 NAS 管理。
+X Bookmark Sync 0.4.1：飞牛独立安装包。
 
-- NAS 书签搜索、详情、同步记录、下载进度与失败重试。
-- 按登录的 X @用户名分库存储；待传数据绑定捕获时的账户。
-- 正式旧数据归属：预览、备份、去重、校验、失败回滚、重启恢复与安全撤销。
-- Chrome/Edge 扩展 0.2.5：复用已有书签页，离线队列补传，登录账户识别。
+- FPK 内置 Python 服务、Web 管理界面、gallery-dl 和 FFmpeg；安装无需下载运行依赖。
+- 应用中心独立启停，以专用应用用户运行，不再依赖 xbm.service。
+- 配置、数据库、媒体和迁移备份独立于程序目录；升级保留数据。
+- CI 验证冻结后的程序、安装/启动/停止/升级/卸载流程，以及空数据 HTTP 界面。
 
-### 下载与安装
+附件：`x-bookmark-sync-0.4.1.fpk`、`xbm-0.4.1-py3-none-any.whl`、`x-bookmark-extension-0.2.5.zip`、`xbm-0.4.1-source.tar.gz` 和 `SHA256SUMS`。
 
-- `x-bookmark-sync-0.4.0.fpk`：**飞牛桌面入口包**。需要先部署并运行 `xbm.service`；不是包含 Python 服务的独立安装器。支持 x86 fnOS 1.2.0401 及以上。
-- `xbm-0.4.0-py3-none-any.whl`：Python 服务端（Python 3.11+），安装后配置 `config.toml`，运行 `xbm serve --port 8765`。
-- `x-bookmark-extension-0.2.5.zip`：解压后在 Chrome/Edge 开发者模式加载目录；升级后刷新 X 页面。
-- `xbm-0.4.0-source.tar.gz`：包含源码、测试、FPK 配置与构建脚本。
-- `SHA256SUMS`：下载文件校验值，Linux 可运行 `sha256sum --check SHA256SUMS`。
+支持 x86_64 fnOS 1.2.0401+。在应用中心手动安装 FPK，启动后点击“X 书签库”。服务端口为 8765，请仅在可信私有网络使用。
 
-升级前备份书签数据库。已有账户数据继续保留；账户分类不等于访问鉴权，本服务仅用于可信私有网络。完整配置与安装步骤见 README。
+旧入口包或手工部署升级：备份原配置及数据，停止原 xbm.service 释放端口，再安装新包。不会自动移动或接管旧数据；按 README 复制数据并授予应用用户权限，或配置可访问的旧路径。卸载时选择保留应用数据。
+
+Python wheel 单独使用仍需要 Python 3.11+；插件解压后在 Chromium 开发者模式加载。

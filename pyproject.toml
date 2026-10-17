@@ -1,6 +1,6 @@
 [project]
 name = "xbm"
-version = "0.4.0"
+version = "0.4.1"
 description = "Sync X (Twitter) bookmarks media to local NAS storage"
 requires-python = ">=3.11"
 dependencies = [

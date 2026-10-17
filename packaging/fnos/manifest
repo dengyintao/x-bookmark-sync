@@ -1,7 +1,7 @@
 appname=x-bookmark-sync
-version=0.4.0
+version=0.4.1
 display_name=X 书签库
-desc=个人 X 书签、同步记录和媒体下载管理。连接本机已部署的 xbm 服务。
+desc=个人 X 书签、同步记录和媒体下载管理。内置服务与运行环境，安装即可使用。
 source=thirdparty
 platform=x86
 maintainer=dengyintao
@@ -9,4 +9,4 @@ desktop_uidir=ui
 desktop_applaunchname=x-bookmark-sync.main
 os_min_version=1.2.0401
 service_port=8765
-checkport=false
+checkport=true

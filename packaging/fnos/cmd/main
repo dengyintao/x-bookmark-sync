@@ -1,9 +1,42 @@
 #!/bin/sh
-# Launcher package manages the existing systemd service; it never owns bookmark data.
-case "$1" in
- start) systemctl start xbm.service ;;
- stop) systemctl stop xbm.service ;;
- status) systemctl is-active --quiet xbm.service || exit 3 ;;
- restart) systemctl restart xbm.service ;;
+set -eu
+: "${TRIM_APPDEST:?}" "${TRIM_PKGVAR:?}" "${TRIM_PKGETC:?}"
+TRIM_APPDEST=$(cd "$TRIM_APPDEST" && pwd -P)
+pidfile="$TRIM_PKGVAR/server.pid"
+export PATH="$TRIM_APPDEST:$PATH"
+export HOME="$TRIM_PKGVAR"
+# Only signal our own process; a stale PID may have been reused.
+alive() {
+    [ -f "$pidfile" ] || return 1
+    pid=$(cat "$pidfile")
+    case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+    kill -0 "$pid" 2>/dev/null || return 1
+    [ "$(readlink "/proc/$pid/exe")" = "$TRIM_APPDEST/server/xbm" ]
+}
+case "${1:-}" in
+ start)
+    alive && exit 0
+    mkdir -p "$TRIM_PKGVAR" "$TRIM_PKGETC"
+    "$TRIM_APPDEST/server/xbm" --config "$TRIM_PKGETC/config.toml" serve --port 8765 >> "$TRIM_PKGVAR/server.log" 2>&1 &
+    echo $! > "$pidfile"
+    # Fail visibly if the port is occupied or initialization fails.
+    sleep 2
+    if ! alive; then
+        tail -n 15 "$TRIM_PKGVAR/server.log" > "${TRIM_TEMP_LOGFILE:-/dev/stderr}"
+        rm -f "$pidfile"
+        exit 1
+    fi ;;
+ stop)
+    if alive; then
+        kill "$pid"
+        for n in $(seq 1 30); do
+            alive || break
+            sleep 1
+        done
+        if alive; then echo "服务未退出，请检查日志。" >&2; exit 1; fi
+    fi
+    rm -f "$pidfile" ;;
+ status) alive || exit 3 ;;
+ restart) "$0" stop; "$0" start ;;
  *) exit 1 ;;
 esac
