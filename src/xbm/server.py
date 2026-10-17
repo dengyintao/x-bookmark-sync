@@ -7,12 +7,14 @@ from __future__ import annotations
 import json
 import time
 import re
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from . import __version__
 from .config import Config
+from .accounts import AccountManager, account_key
 from .db import Store
 from .downloader import pick_best
 
@@ -95,14 +97,33 @@ class Handler(BaseHTTPRequestHandler):
         self._cors()
         self.end_headers()
 
+    def _select_account(self, value='', create=False):
+        try:
+            self.account = account_key(value)
+            self.config, self.store = self.accounts.get(self.account, create=create)
+            return True
+        except ValueError as error:
+            self._json(400, {"ok": False, "error": str(error)})
+        except KeyError:
+            self._json(404, {"ok": False, "error": "account not found"})
+        return False
+
     def do_GET(self):
         from . import web
+        parts = urlsplit(self.path)
+        if parts.path == '/api/accounts':
+            self._json(200, {"ok": True, "items": self.accounts.list()})
+            return
+        if not self._select_account(parse_qs(parts.query).get('account', [''])[0]):
+            return
         if web.get(self):
             return
-        if self.path == "/api/status":
+        if parts.path == "/api/status":
             self._json(200, {
                 "ok": True,
                 "service": "xbm",
+                "version": __version__,
+                "account": self.account,
                 "tweets": self.store.count_tweets(),
                 "watermark": self.store.latest_tweet_id(),
                 "media": self.store.media_stats(),
@@ -114,9 +135,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         from . import web
+        if urlsplit(self.path).path != '/api/ingest':
+            if not self._select_account(parse_qs(urlsplit(self.path).query).get('account', [''])[0]):
+                return
         if web.post(self):
             return
-        if self.path != "/api/ingest":
+        if urlsplit(self.path).path != "/api/ingest":
             self._json(404, {"ok": False, "error": "not found"})
             return
         try:
@@ -148,7 +172,16 @@ class Handler(BaseHTTPRequestHandler):
                             parts = urlsplit(url)
                             if parts.scheme != "https" or parts.hostname not in {"pbs.twimg.com", "video.twimg.com"} or parts.username or parts.password or parts.port not in (None, 443):
                                 raise ValueError("media URL must use an HTTPS X CDN address")
+            if not isinstance(payload, dict):
+                raise ValueError('payload must be an object')
+            key = account_key(payload.get('account', ''))
+            query_account = parse_qs(urlsplit(self.path).query).get('account', [key])[0]
+            if account_key(query_account) != key:
+                raise ValueError('account mismatch')
+            if not self._select_account(key, create=True):
+                return
             result = ingest_payload(payload, self.store)
+            result['account'] = self.account
         except ValueError as e:
             self._json(400, {"ok": False, "error": str(e)[:200]})
             return
@@ -160,25 +193,24 @@ class Handler(BaseHTTPRequestHandler):
 
 def make_server(cfg: Config, port: int) -> ThreadingHTTPServer:
     cfg.state_dir.mkdir(parents=True, exist_ok=True)
-    store = Store(cfg.state_dir / "xbm.db")
-    handler = type("XbmHandler", (Handler,), {"config": cfg, "store": store})
+    accounts = AccountManager(cfg)
+    store = accounts.get('')[1]
+    handler = type("XbmHandler", (Handler,), {"config": cfg, "store": store, "accounts": accounts})
     server = ThreadingHTTPServer(("0.0.0.0", port), handler)
+    server._xbm_accounts = accounts
     server._xbm_store = store  # for graceful shutdown
     return server
 
 
 def run(cfg: Config, port: int = 8765) -> None:
-    from .downloader import Downloader
     server = make_server(cfg, port)
-    store = server._xbm_store
-    downloader = Downloader(cfg, store)
-    downloader.start()
+    accounts = server._xbm_accounts
+    accounts.start()
     print(f"xbm serve on :{port}  (data: {cfg.data_root}, media: {cfg.media_dir})")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        downloader.stop()
-        store.close()
+        accounts.close()
         server.server_close()

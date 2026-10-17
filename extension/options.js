@@ -46,7 +46,7 @@ async function loadHistory() {
   if (!entries.length) container.textContent = '暂无任务记录';
   for (const entry of entries.slice().reverse().slice(0, 30)) {
     const row = document.createElement('p');
-    row.textContent = new Date(entry.updatedAt).toLocaleString() + ' · ' + (labels[entry.state] || entry.state) +
+    row.textContent = (entry.account ? '@' + entry.account.slice(2) + ' · ' : '') + new Date(entry.updatedAt).toLocaleString() + ' · ' + (labels[entry.state] || entry.state) +
       (entry.count !== undefined ? ' · 捕获 ' + entry.count + ' 条' : '') +
       (entry.pending !== undefined ? ' · 待传 ' + entry.pending + ' 条' : '') +
       (entry.error ? ' · ' + entry.error : '') +

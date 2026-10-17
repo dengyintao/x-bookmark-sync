@@ -121,7 +121,7 @@ def serve_media(handler, media_id: int) -> None:
 
 
 def post(handler) -> bool:
-    match = re.fullmatch(r'/api/downloads/(\d+)/retry', handler.path)
+    match = re.fullmatch(r'/api/downloads/(\d+)/retry', urlsplit(handler.path).path)
     if not match:
         return False
     # Mutation is available only from our same-origin dashboard, not cross-origin forms.

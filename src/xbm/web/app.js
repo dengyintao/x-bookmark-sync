@@ -52,6 +52,30 @@ let view = "bookmarks",
   generation = 0,
   loading = false;
 const limit = 24;
+let selectedAccount = localStorage.getItem("xbm-account") || "";
+let accountsSignature = "";
+function accountUrl(path) {
+  const url = new URL(path, location.origin);
+  url.searchParams.set("account", selectedAccount);
+  return url.pathname + url.search;
+}
+async function refreshAccounts() {
+  const data = await api("/api/accounts");
+  if (!data.items.some((item) => item.id === selectedAccount))
+    selectedAccount = "";
+  const signature = JSON.stringify(data.items);
+  if (signature !== accountsSignature) {
+    $("account").replaceChildren(
+      ...data.items.map((item) => {
+        const option = el("option", item.label + " · " + item.tweets);
+        option.value = item.id;
+        return option;
+      }),
+    );
+    accountsSignature = signature;
+  }
+  $("account").value = selectedAccount;
+}
 function el(tag, text, className) {
   const n = document.createElement(tag);
   if (text !== undefined) n.textContent = text;
@@ -79,7 +103,7 @@ function bytes(n) {
   return `${n.toFixed(i ? 1 : 0)} ${units[i]}`;
 }
 async function api(path, options = {}) {
-  const r = await fetch(path, {
+  const r = await fetch(path === "/api/accounts" ? path : accountUrl(path), {
     ...options,
     signal: AbortSignal.timeout(12000),
     cache: "no-store",
@@ -94,8 +118,10 @@ function notice(message = "") {
   $("notice").textContent = message;
 }
 async function status() {
+  const account = selectedAccount;
   try {
     const data = await api("/api/status");
+    if (account !== selectedAccount) return;
     const m = data.media;
     $("count-tweets").textContent = data.tweets.toLocaleString();
     $("count-done").textContent = m.done.toLocaleString();
@@ -107,7 +133,9 @@ async function status() {
       : "暂无媒体任务";
     $("connection").textContent = "服务已连接";
     $("connection").className = "dot online";
+    await refreshAccounts();
   } catch (e) {
+    if (account !== selectedAccount) return;
     $("connection").textContent = "连接中断";
     $("connection").className = "dot offline";
     notice("无法连接 NAS，当前显示可能是旧数据。" + e.message);
@@ -174,7 +202,7 @@ function detail(item) {
     if (m.status === "done") {
       if (m.kind === "photo") {
         const img = el("img");
-        img.src = "/api/media/" + m.id;
+        img.src = accountUrl("/api/media/" + m.id);
         img.alt = "书签图片";
         img.loading = "lazy";
         img.addEventListener("error", () => {
@@ -187,7 +215,7 @@ function detail(item) {
         const video = el("video");
         video.controls = true;
         video.preload = "metadata";
-        video.src = "/api/media/" + m.id;
+        video.src = accountUrl("/api/media/" + m.id);
         body.append(video);
       }
     } else
@@ -313,7 +341,7 @@ function downloads() {
       action.append(b);
     } else if (item.status === "done") {
       const a = el("a", "打开文件 ↗");
-      a.href = "/api/media/" + item.id;
+      a.href = accountUrl("/api/media/" + item.id);
       a.target = "_blank";
       a.rel = "noopener";
       action.append(a);
@@ -448,8 +476,28 @@ document.addEventListener("visibilitychange", () => {
     load();
   }
 });
-navigate();
-status();
+$("account").addEventListener("change", () => {
+  selectedAccount = $("account").value;
+  localStorage.setItem("xbm-account", selectedAccount);
+  $("detail").close();
+  $("search").value = "";
+  for (const id of [
+    "count-tweets",
+    "count-done",
+    "count-pending",
+    "count-failed",
+  ])
+    $(id).textContent = "—";
+  navigate();
+  status();
+});
+$("detail").addEventListener("close", () => $("detail-body").replaceChildren());
+refreshAccounts()
+  .catch((e) => notice(e.message))
+  .finally(() => {
+    navigate();
+    status();
+  });
 setInterval(() => {
   if (document.hidden) return;
   status();

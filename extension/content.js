@@ -18,12 +18,21 @@
     return /\/(?:login|flow\/login|account\/access)(?:\/|$)/.test(location.pathname) ? 'login' : 'other';
   }
 
+  function currentAccount() {
+    const link = document.querySelector('a[data-testid="AppTabBar_Profile_Link"]');
+    const match = link && /^\/([a-zA-Z0-9_]{1,15})\/?$/.exec(link.getAttribute('href') || '');
+    if (!match) return '';
+    return 'x:' + match[1].toLowerCase();
+  }
+
   // 转发 injected.js 推送的实时捕获（用户被动浏览场景）
   window.addEventListener('message', function (ev) {
     if (ev.source !== window || !ev.data || ev.data.__xbm !== true) return;
     if (pageType() === 'bookmarks' && ev.data.type === 'tweets' && ev.data.tweets && ev.data.tweets.length) {
+      if (!ev.data.account || ev.data.account !== currentAccount()) return;
       chrome.runtime.sendMessage({
         type: 'tweets-captured',
+        account: ev.data.account,
         tweets: ev.data.tweets,
         page: location.href,
       }).catch(function () { /* background 休眠时忽略，下轮补 */ });
@@ -38,7 +47,7 @@
         if (ev.data.type === 'buffer') {
           clearTimeout(timeout);
           window.removeEventListener('message', onMsg);
-          resolve({ tweets: ev.data.tweets || [], diagnostics: ev.data.diagnostics || {} });
+          resolve({ account: ev.data.account, tweets: ev.data.tweets || [], diagnostics: ev.data.diagnostics || {} });
         }
       }
       window.addEventListener('message', onMsg);
@@ -72,7 +81,7 @@
   // background 指令：开始一次采集
   chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     if (msg && msg.type === 'ping') {
-      sendResponse({ ok: true, url: location.href, pageType: pageType(), ready: document.readyState !== 'loading' && pageType() !== 'loading' });
+      sendResponse({ ok: true, url: location.href, pageType: pageType(), account: currentAccount(), ready: document.readyState !== 'loading' && pageType() !== 'loading' });
       return;
     }
     if (msg && msg.type === 'collect') {
@@ -82,6 +91,8 @@
       }
       (async function () {
         try {
+          const account = currentAccount();
+          if (!account) throw new Error('无法识别当前登录的 X 账户，请刷新书签页后重试');
           // 先等页面初始加载出第一批
           await sleep(3000);
           if (msg.full) {
@@ -94,6 +105,7 @@
             throw new Error('页面已离开书签标签，请切换回书签后重试');
           }
           const capture = await getBuffer();
+          if (currentAccount() !== account || capture.account !== account) throw new Error('采集期间 X 账户发生变化，请刷新页面后重试');
           sendResponse({ ok: true, ...capture });
         } catch (e) {
           sendResponse({ ok: false, error: String(e && e.message || e) });

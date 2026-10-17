@@ -7,6 +7,14 @@
   if (window.__xbm_injected) return;
   window.__xbm_injected = true;
 
+  function currentAccount() {
+    const link = document.querySelector('a[data-testid="AppTabBar_Profile_Link"]');
+    const match = link && /^\/([a-zA-Z0-9_]{1,15})\/?$/.exec(link.getAttribute('href') || '');
+    if (!match) return '';
+    return 'x:' + match[1].toLowerCase();
+  }
+
+  let bufferAccount = '';
   const seen = new Set();
   const buffer = [];
   const diagnostics = { graphqlResponses: 0, responses: 0, parsed: 0, operations: [], dataKeys: [] };
@@ -91,7 +99,7 @@
     return tweets;
   }
 
-  function handleJson(url, json) {
+  function handleJson(url, json, account) {
     // 只关心 GraphQL 响应；Bookmarks 相关优先，其他时间线也顺手收（去重兜底）
     if (url.indexOf('/graphql/') === -1) return;
     const operation = url.split('/graphql/')[1].split('?')[0].split('/').pop();
@@ -101,11 +109,14 @@
     if (!/bookmark/i.test(operation)) return;
     diagnostics.responses++;
     diagnostics.dataKeys = Object.keys((json && json.data) || {}).slice(0, 20);
+    // Bind the response to the account at request time, never the currently selected author.
+    if (!account || account !== currentAccount()) return;
+    if (bufferAccount !== account) { buffer.length = 0; seen.clear(); bufferAccount = account; }
     const tweets = extractFromPayload(json);
     diagnostics.parsed += tweets.length;
     if (tweets.length) {
       buffer.push.apply(buffer, tweets);
-      window.postMessage({ __xbm: true, type: 'tweets', tweets: tweets }, '*');
+      window.postMessage({ __xbm: true, type: 'tweets', tweets: tweets, account: account }, '*');
     }
   }
 
@@ -117,11 +128,12 @@
     try {
       url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
     } catch (e) {}
+    const account = currentAccount();
     const resp = await origFetch.apply(this, args);
     if (url.indexOf('/graphql/') !== -1) {
       try {
         const clone = resp.clone();
-        clone.json().then(function (j) { handleJson(url, j); }).catch(function () {});
+        clone.json().then(function (j) { handleJson(url, j, account); }).catch(function () {});
       } catch (e) {}
     }
     return resp;
@@ -132,6 +144,7 @@
   const origSend = XMLHttpRequest.prototype.send;
   XMLHttpRequest.prototype.open = function (method, url) {
     this.__xbm_url = url;
+    this.__xbm_account = currentAccount();
     return origOpen.apply(this, arguments);
   };
   XMLHttpRequest.prototype.send = function () {
@@ -139,7 +152,7 @@
       try {
         const url = this.__xbm_url || '';
         if (url.indexOf('/graphql/') !== -1 && this.responseText) {
-          handleJson(url, JSON.parse(this.responseText));
+          handleJson(url, JSON.parse(this.responseText), this.__xbm_account);
         }
       } catch (e) {}
     });
@@ -150,14 +163,15 @@
   window.addEventListener('message', function (ev) {
     if (ev.source !== window || !ev.data || ev.data.__xbm !== true) return;
     if (ev.data.type === 'get-buffer') {
-      const out = buffer.slice();
+      const account = currentAccount();
+      const out = account && account === bufferAccount ? buffer.slice() : [];
       // 保留页面缓冲：本地持久化失败时仍可再次读取。
       const uniq = [];
       const local = new Set();
       out.forEach(function (t) {
         if (!local.has(t.tweet_id)) { local.add(t.tweet_id); uniq.push(t); }
       });
-      window.postMessage({ __xbm: true, type: 'buffer', tweets: uniq, diagnostics: diagnostics }, '*');
+      window.postMessage({ __xbm: true, type: 'buffer', tweets: uniq, account: account, diagnostics: diagnostics }, '*');
     }
     if (ev.data.type === 'ping') {
       window.postMessage({ __xbm: true, type: 'pong' }, '*');

@@ -8,9 +8,9 @@ function setup(response, collect = {ok:true,tweets:[{tweet_id:'99'}]}) {
   const removed=[], updated=[]; let created=0;
   const stored = {};
   const context = vm.createContext({ URL, AbortSignal, console, setTimeout, clearTimeout,
-    fetch: async()=>({ok:true,json:async()=>({ok:true})}),
+    fetch: async()=>({ok:true,json:async()=>({ok:true,account:'x:fixture'})}),
     chrome: { storage: {sync: {get:async d=>d}, local: {get:async d=>({...d,...structuredClone(stored)}),set:async d=>Object.assign(stored,structuredClone(d))}},
-      tabs: {query:async()=>[{id:1,active:true,url:response.url}],create:async()=>({id:++created}),sendMessage:async(id,m)=>m.type==='ping'?response:collect,
+      tabs: {query:async()=>[{id:1,active:true,url:response.url}],create:async()=>({id:++created}),sendMessage:async(id,m)=>m.type==='ping'?response:{account:'x:fixture',...collect},
         remove:async id=>removed.push(id),update:async id=>updated.push(id)},
       alarms:{onAlarm:{addListener(){}},create(){}},
       runtime:{onMessage:{addListener(){}},onInstalled:{addListener(){}},onStartup:{addListener(){}}}}
@@ -40,7 +40,7 @@ test('overlapping manual and alarm sync share a single tab',async()=>{
 });
 test('content script answers readiness ping on login page',()=>{
   let listener;
-  const c=vm.createContext({window:{addEventListener(){}},document:{readyState:'complete'},location:{href:'https://x.com/i/flow/login'},chrome:{runtime:{onMessage:{addListener(f){listener=f}}}}});
+  const c=vm.createContext({window:{addEventListener(){}},document:{readyState:'complete',querySelector:()=>null},location:{href:'https://x.com/i/flow/login'},chrome:{runtime:{onMessage:{addListener(f){listener=f}}}}});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../extension/content.js'),'utf8'),c);
   let result;listener({type:'ping'},{},r=>result=r);
   assert.equal(result.ok,true);assert.equal(result.ready,true);
@@ -115,7 +115,7 @@ test('outbox keeps more than 2000 bookmarks instead of truncating',async()=>{
 function pageProbe(pathname, selectedTab) {
   let listener;
   const c=vm.createContext({window:{addEventListener(){}},
-    document:{readyState:'complete',querySelector:()=>selectedTab===null?null:{textContent:selectedTab}},
+    document:{readyState:'complete',querySelector:selector=>selector.includes('Profile_Link')?null:(selectedTab===null?null:{textContent:selectedTab})},
     location:{pathname,href:'https://x.com'+pathname},
     chrome:{runtime:{onMessage:{addListener(f){listener=f}}}}});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../extension/content.js'),'utf8'),c);
@@ -147,7 +147,7 @@ test('navigation channel failure reconnects and records recovery',async()=>{
   h.context.chrome.tabs.sendMessage=async(id,msg)=>{
     if(msg.type==='ping')return ready;
     if(++attempts===1)throw new Error('message channel closed');
-    return {ok:true,tweets:[{tweet_id:'99'}]};
+    return {ok:true,account:'x:fixture',tweets:[{tweet_id:'99'}]};
   };
   await vm.runInContext('runSync({})',h.context);
   assert.equal(attempts,2);
@@ -170,7 +170,7 @@ async function interceptFixture(data,operation='Bookmarks') {
  const messages=[],listeners={};
  function XHR(){};XHR.prototype.open=function(){};XHR.prototype.send=function(){};
  const win={fetch:async()=>({clone:()=>({json:async()=>data})}),addEventListener:(type,fn)=>{listeners[type]=fn},postMessage:msg=>messages.push(msg)};
- const c=vm.createContext({window:win,XMLHttpRequest:XHR});
+ const c=vm.createContext({document:{querySelector:()=>({getAttribute:()=>'/fixture'})},window:win,XMLHttpRequest:XHR});
  vm.runInContext(fs.readFileSync(path.join(__dirname,'../extension/injected.js'),'utf8'),c);
  await win.fetch('https://x.com/i/api/graphql/fake/'+operation);await new Promise(setImmediate);
  listeners.message({source:win,data:{__xbm:true,type:'get-buffer'}});
@@ -210,7 +210,7 @@ test('prefers active bookmark tab and skips active likes',async()=>{
   h.context.chrome.tabs.query=async()=>[{id:2,active:false,lastAccessed:200},{id:1,active:true,lastAccessed:100}];
   h.context.chrome.tabs.sendMessage=async(id,m)=>{
    if(m.type==='ping')return {ok:true,ready:true,pageType:id===1?activeType:'bookmarks',url:'https://x.com/i/history'};
-   captures.push(id);return {ok:true,tweets:[{tweet_id:'99'}]};
+   captures.push(id);return {ok:true,account:'x:fixture',tweets:[{tweet_id:'99'}]};
   };
   await vm.runInContext('runSync({})',h.context);
   assert.deepEqual(captures,[activeType==='bookmarks'?1:2]);
@@ -222,4 +222,55 @@ test('stale content script asks for refresh without opening replacement tabs',as
  h.context.chrome.tabs.sendMessage=async()=>{throw new Error('Receiving end does not exist');};
  await assert.rejects(vm.runInContext('runSync({})',h.context),/刷新/);
  assert.equal(h.created,0);assert.deepEqual(h.updated,[]);
+});
+
+test('outbox separates identical tweet IDs and preserves capture account after switching',async()=>{
+ const h=setup({});const deliveries=[];
+ h.context.fetch=async(url,options)=>{const payload=JSON.parse(options.body);deliveries.push(payload);return {ok:true,json:async()=>({ok:true,account:payload.account})};};
+ await vm.runInContext("enqueue([{tweet_id:'1'}], 'x:alpha')",h.context);
+ await vm.runInContext("enqueue([{tweet_id:'1'}], 'x:beta')",h.context);
+ assert.equal(h.stored.xbm_pending_queue.length,2);
+ await vm.runInContext("flushQueue('http://nas')",h.context);
+ assert.deepEqual(deliveries.map(p=>p.account),['x:alpha','x:beta']);
+ assert.ok(deliveries.every(p=>p.tweets[0].tweet_id==='1'&&!('_xbm_account' in p.tweets[0])));
+});
+test('legacy queued captures remain unassigned instead of inheriting current login',async()=>{
+ const h=setup({});h.stored.xbm_pending_queue=[{tweet_id:'legacy'}];const accounts=[];
+ h.context.fetch=async(url,options)=>{const payload=JSON.parse(options.body);accounts.push(payload.account);return {ok:true,json:async()=>({ok:true,account:payload.account})};};
+ await vm.runInContext("enqueue([{tweet_id:'new'}], 'x:alpha')",h.context);
+ await vm.runInContext("flushQueue('http://nas')",h.context);
+ assert.deepEqual(accounts,['','x:alpha']);
+});
+test('missing capture identity stops manual sync without assigning data to legacy',async()=>{
+ const h=setup({ok:true,ready:true,url:'https://x.com/i/bookmarks'},{ok:true,account:'',tweets:[{tweet_id:'99'}]});
+ await assert.rejects(vm.runInContext('runSync({})',h.context),/无法识别/);
+ assert.equal((h.stored.xbm_pending_queue||[]).length,0);
+});
+test('account-aware delivery rejects an old NAS receipt and keeps pending data',async()=>{
+ const h=setup({});h.context.fetch=async()=>({ok:true,json:async()=>({ok:true})});
+ await vm.runInContext("enqueue([{tweet_id:'1'}], 'x:alpha')",h.context);
+ await assert.rejects(vm.runInContext("flushQueue('http://nas')",h.context),/账户确认不匹配/);
+ assert.equal(h.stored.xbm_pending_queue.length,1);
+});
+test('in-flight responses from previous login are discarded',async()=>{
+ let handle='alpha',resolveResponse;const messages=[],listeners={};
+ const payload={data:{timeline:{instructions:[{tweet_results:{result:{legacy:{id_str:'123'}}}}]}}};
+ function XHR(){};XHR.prototype.open=function(){};XHR.prototype.send=function(){};
+ const win={fetch:()=>new Promise(resolve=>resolveResponse=resolve),addEventListener:(t,fn)=>listeners[t]=fn,postMessage:m=>messages.push(m)};
+ const c=vm.createContext({window:win,XMLHttpRequest:XHR,document:{querySelector:()=>({getAttribute:()=>'/'+handle})}});
+ vm.runInContext(fs.readFileSync(path.join(__dirname,'../extension/injected.js'),'utf8'),c);
+ const request=win.fetch('https://x.com/i/api/graphql/fake/Bookmarks');handle='beta';
+ resolveResponse({clone:()=>({json:async()=>payload})});await request;await new Promise(setImmediate);
+ listeners.message({source:win,data:{__xbm:true,type:'get-buffer'}});
+ assert.equal(messages.find(m=>m.type==='buffer').tweets.length,0);
+ assert.ok(!messages.some(m=>m.type==='tweets'));
+});
+test('capture owner comes from logged-in profile entry rather than tweet author',async()=>{
+ const result=await interceptFixture({data:{timeline:{instructions:[{tweet_results:{result:{legacy:{id_str:'123'},core:{user_results:{result:{legacy:{name:'Other author',screen_name:'other_author'}}}}}}}]}}});
+ assert.equal(result.account,'x:fixture');assert.equal(result.tweets[0].screen_name,'other_author');
+});
+test('content readiness reports normalized logged-in profile handle',()=>{
+ let listener;const c=vm.createContext({window:{addEventListener(){}},document:{readyState:'complete',querySelector:selector=>selector.includes('Profile_Link')?{getAttribute:()=>'/Login_Account'}:{textContent:'Bookmarks'}},location:{href:'https://x.com/i/history',pathname:'/i/history'},chrome:{runtime:{onMessage:{addListener:f=>listener=f}}}});
+ vm.runInContext(fs.readFileSync(path.join(__dirname,'../extension/content.js'),'utf8'),c);
+ let result;listener({type:'ping'},{},r=>result=r);assert.equal(result.account,'x:login_account');
 });

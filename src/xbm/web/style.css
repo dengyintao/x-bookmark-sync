@@ -568,3 +568,28 @@ button {
   white-space: nowrap;
   flex-shrink: 0;
 }
+
+.account-picker {
+  margin-top: 28px;
+}
+.account-picker label {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  margin: 0 0 8px 6px;
+}
+.account-picker select {
+  width: 100%;
+  font-size: 12px;
+}
+.account-picker + .nav-label {
+  margin-top: 24px;
+}
+@media (max-width: 720px) {
+  .account-picker {
+    margin-top: 14px;
+  }
+  .account-picker label {
+    display: none;
+  }
+}
