@@ -28,6 +28,8 @@ def parse_manifest(text):
 def version_info(tag=''):
     version = tomllib.loads((ROOT/'pyproject.toml').read_text())['project']['version']
     manifest = parse_manifest((ROOT/'packaging/fnos/manifest').read_text())
+    if f'__version__ = "{version}"' not in (ROOT/'src/xbm/__init__.py').read_text():
+        raise ValueError('Runtime version must match Python package version')
     if manifest['version'] != version:
         raise ValueError('FPK manifest version must match Python package version')
     if tag and tag != 'v' + version:
