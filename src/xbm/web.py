@@ -137,3 +137,59 @@ def post(handler) -> bool:
     handler._json(200 if changed else 409, {'ok': changed,
                   'message': '已加入重试队列' if changed else '任务不存在或已在下载/已完成'})
     return True
+
+
+def management(handler, method):
+    """Operations bypass library selection so journal polling stays responsive."""
+    import json
+    from .migration import preview
+    parts = urlsplit(handler.path)
+    rollback = re.fullmatch(r'/api/migrations/([a-z0-9_]+)/rollback', parts.path)
+    if not rollback and parts.path not in {'/api/migrations', '/api/migrations/preview', '/api/browser-account'}:
+        return False
+    try:
+        if method == 'GET':
+            if rollback:
+                raise ValueError('use POST for rollback')
+            if parts.path == '/api/migrations':
+                items = handler.migrations.list()
+                result = {'items': items, 'total': len(items)}
+            elif parts.path == '/api/browser-account':
+                result = {'observed': handler.migrations.observed()}
+            else:
+                target = parse_qs(parts.query).get('target', [''])[0]
+                result = preview(handler.accounts, target)
+            handler._json(200, {'ok': True, **result})
+        else:
+            if parts.path == '/api/migrations/preview':
+                raise ValueError('use GET for preview')
+            if (parts.path == '/api/migrations' or rollback) and not same_origin(handler, 'migrate'):
+                handler._json(403, {'ok': False, 'error': 'same-origin dashboard required'})
+                return True
+            length = int(handler.headers.get('Content-Length', 0))
+            if not 0 < length <= 8192:
+                raise ValueError('invalid operation body')
+            payload = json.loads(handler.rfile.read(length))
+            if not isinstance(payload, dict):
+                raise ValueError('body must be an object')
+            if rollback:
+                result = handler.migrations.rollback(rollback[1])
+            elif parts.path == '/api/browser-account':
+                result = {'observed': handler.migrations.observe(payload.get('account'), payload.get('observed_at'))}
+            else:
+                job = handler.migrations.start(payload.get('account'), payload.get('token'))
+                result = {'id': job}
+            handler._json(202 if parts.path == '/api/migrations' else 200, {'ok': True, **result})
+    except (ValueError, KeyError) as error:
+        handler._json(400, {'ok': False, 'error': str(error)[:200]})
+    except Exception:
+        handler._json(500, {'ok': False, 'error': '操作失败，请检查 NAS 存储空间和服务日志'})
+    return True
+
+
+def same_origin(handler, action):
+    origin = handler.headers.get('Origin')
+    parsed = urlsplit(origin) if origin else None
+    return (handler.headers.get('X-XBM-Action') == action and
+            (not parsed or (parsed.netloc == handler.headers.get('Host') and parsed.scheme in {'http', 'https'})) and
+            handler.headers.get('Sec-Fetch-Site') != 'cross-site')

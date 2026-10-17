@@ -141,6 +141,40 @@ def cmd_serve(args) -> int:
     return 0
 
 
+def cmd_migrate(args) -> int:
+    # Use the running service: it coordinates downloads, ingestion and journal locks.
+    import urllib.request
+    from urllib.parse import urlencode
+    try:
+        if args.rollback:
+            request = urllib.request.Request(args.server.rstrip('/') + '/api/migrations/' + args.rollback + '/rollback',
+                data=b'{}', headers={'Content-Type':'application/json','X-XBM-Action':'migrate'})
+            with urllib.request.urlopen(request,timeout=30) as response:
+                print(json.dumps(json.load(response),ensure_ascii=False))
+            return 0
+        if not args.account:
+            raise ValueError('请指定 --account 或 --rollback')
+        account = 'x:' + args.account.lstrip('@').removeprefix('x:').lower()
+        base = args.server.rstrip('/')
+        with urllib.request.urlopen(base + '/api/migrations/preview?' + urlencode({'target': account}), timeout=30) as response:
+            plan = json.load(response)
+        print(json.dumps(plan, ensure_ascii=False, indent=2))
+        if not args.apply:
+            return 0
+        if not plan.get('ready'):
+            print('迁移条件未满足，请处理预览中的提示。')
+            return 1
+        request = urllib.request.Request(base + '/api/migrations',
+            data=json.dumps({'account': account, 'token': plan['token']}).encode(),
+            headers={'Content-Type': 'application/json', 'X-XBM-Action': 'migrate'})
+        with urllib.request.urlopen(request, timeout=30) as response:
+            print(json.dumps(json.load(response), ensure_ascii=False))
+        return 0
+    except Exception as error:
+        print('迁移请求失败：' + str(error))
+        return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="xbm", description="同步 X 书签到 NAS 本地")
     p.add_argument("--config", help="config.toml 路径")
@@ -168,6 +202,12 @@ def build_parser() -> argparse.ArgumentParser:
     pv = sub.add_parser("serve", help="启动 Web 服务（含 /api/ingest）")
     pv.add_argument("--port", type=int, default=8765)
     pv.set_defaults(func=cmd_serve)
+    pm = sub.add_parser('migrate-legacy', help='预览旧数据归属；--apply 发起备份和迁移')
+    pm.add_argument('--account', help='已由插件识别的 @用户名')
+    pm.add_argument('--server', default='http://127.0.0.1:8765')
+    pm.add_argument('--rollback', help='撤销指定任务；有新数据时拒绝覆盖')
+    pm.add_argument('--apply', action='store_true')
+    pm.set_defaults(func=cmd_migrate)
     return p
 
 

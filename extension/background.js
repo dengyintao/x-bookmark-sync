@@ -189,9 +189,25 @@ async function runSyncOnce(opts) {
 
 }
 
+async function reportBrowserAccount(account, observedAt = Date.now()) {
+  if (!validAccount(account)) throw new Error('无法识别 X 账户');
+  await chrome.storage.local.set({ xbm_current_account: account, xbm_account_observed_at: observedAt });
+  const cfg = await getConfig();
+  const response = await fetch(cfg.serverUrl + '/api/browser-account', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(10000), body: JSON.stringify({ account, observed_at: observedAt / 1000 }),
+  });
+  if (!response.ok) throw new Error('账户识别信息尚未送达 NAS');
+  const receipt = await response.json();
+  if (!receipt.ok || !receipt.observed || receipt.observed.account !== account) throw new Error('NAS 账户识别确认不匹配');
+}
+
 // 定时采集
 chrome.alarms.onAlarm.addListener(function (alarm) {
   if (alarm.name === RETRY_ALARM) {
+    chrome.storage.local.get({xbm_current_account:'',xbm_account_observed_at:0}).then(data => {
+      if (data.xbm_current_account) return reportBrowserAccount(data.xbm_current_account, data.xbm_account_observed_at || Date.now());
+    }).catch(e => console.warn('[xbm] 账户识别信息待重试:',e.message));
     getConfig().then(cfg => flushQueue(cfg.serverUrl)).catch(e => console.warn('[xbm] 补传失败:', e.message));
   }
   if (alarm.name === ALARM_NAME) {
@@ -203,6 +219,10 @@ chrome.alarms.onAlarm.addListener(function (alarm) {
 
 // 被动捕获：用户手动刷书签页时 content.js 实时转发的
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+  if (msg && msg.type === 'account-observed') {
+    reportBrowserAccount(msg.account, msg.observedAt).then(() => sendResponse({ok:true}), error => sendResponse({ok:false,error:error.message}));
+    return true;
+  }
   if (msg && msg.type === 'collect-progress') {
     // Frequent page messages keep a long collection observable without storing tweet text.
     chrome.storage.local.set({ xbm_collect_progress: { scrolls: msg.scrolls, updatedAt: Date.now() } }).catch(console.warn);

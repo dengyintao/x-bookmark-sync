@@ -41,7 +41,8 @@
           <h1 id="title">全部书签</h1>
           <p id="subtitle">值得保存的内容，随时回看。</p>
         </div>
-        <button id="refresh" class="outline">↻ 刷新</button>
+        <button id="ownership-open" class="outline">旧数据归属</button
+        ><button id="refresh" class="outline">↻ 刷新</button>
       </header>
       <div id="notice" role="status" hidden></div>
       <section class="stats" aria-label="服务概览">
@@ -99,6 +100,28 @@
         </button>
       </div>
       <div id="detail-body"></div>
+    </dialog>
+    <dialog id="ownership">
+      <div class="dialog-heading">
+        <h2>旧数据归属</h2>
+        <button id="ownership-close" class="outline" aria-label="关闭归属管理">
+          ✕
+        </button>
+      </div>
+      <p class="view-note">
+        将未归属的书签、同步记录和下载文件合并到选定账户。原文件保留，执行前自动备份；不会自动猜测旧数据属于谁。
+      </p>
+      <label for="ownership-target">目标 X 账户</label>
+      <select id="ownership-target" aria-label="目标 X 账户"></select>
+      <div class="ownership-actions">
+        <button id="ownership-read" class="outline">读取插件识别的账户</button
+        ><button id="ownership-preview">预览归属</button>
+      </div>
+      <p id="ownership-account-note" class="view-note"></p>
+      <div id="ownership-plan" role="status"></div>
+      <button id="ownership-confirm" hidden>确认归属</button>
+      <h3>归属任务记录</h3>
+      <div id="ownership-history" aria-live="polite"></div>
     </dialog>
   </body>
 </html>

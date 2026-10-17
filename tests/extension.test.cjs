@@ -7,13 +7,13 @@ const source = fs.readFileSync(path.join(__dirname, '../extension/background.js'
 function setup(response, collect = {ok:true,tweets:[{tweet_id:'99'}]}) {
   const removed=[], updated=[]; let created=0;
   const stored = {};
-  const context = vm.createContext({ URL, AbortSignal, console, setTimeout, clearTimeout,
+  const context = vm.createContext({setInterval(){}, URL, AbortSignal, console, setTimeout, clearTimeout,
     fetch: async()=>({ok:true,json:async()=>({ok:true,account:'x:fixture'})}),
     chrome: { storage: {sync: {get:async d=>d}, local: {get:async d=>({...d,...structuredClone(stored)}),set:async d=>Object.assign(stored,structuredClone(d))}},
       tabs: {query:async()=>[{id:1,active:true,url:response.url}],create:async()=>({id:++created}),sendMessage:async(id,m)=>m.type==='ping'?response:{account:'x:fixture',...collect},
         remove:async id=>removed.push(id),update:async id=>updated.push(id)},
       alarms:{onAlarm:{addListener(){}},create(){}},
-      runtime:{onMessage:{addListener(){}},onInstalled:{addListener(){}},onStartup:{addListener(){}}}}
+      runtime:{sendMessage:async()=>({ok:true}),onMessage:{addListener(){}},onInstalled:{addListener(){}},onStartup:{addListener(){}}}}
   });
   vm.runInContext(source,context);
   return {context,removed,updated,stored,get created(){return created}};
@@ -40,7 +40,7 @@ test('overlapping manual and alarm sync share a single tab',async()=>{
 });
 test('content script answers readiness ping on login page',()=>{
   let listener;
-  const c=vm.createContext({window:{addEventListener(){}},document:{readyState:'complete',querySelector:()=>null},location:{href:'https://x.com/i/flow/login'},chrome:{runtime:{onMessage:{addListener(f){listener=f}}}}});
+  const c=vm.createContext({setInterval(){},window:{addEventListener(){}},document:{addEventListener(){},readyState:'complete',querySelector:()=>null},location:{href:'https://x.com/i/flow/login'},chrome:{runtime:{sendMessage:async()=>({ok:true}),onMessage:{addListener(f){listener=f}}}}});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../extension/content.js'),'utf8'),c);
   let result;listener({type:'ping'},{},r=>result=r);
   assert.equal(result.ok,true);assert.equal(result.ready,true);
@@ -114,10 +114,10 @@ test('outbox keeps more than 2000 bookmarks instead of truncating',async()=>{
 });
 function pageProbe(pathname, selectedTab) {
   let listener;
-  const c=vm.createContext({window:{addEventListener(){}},
-    document:{readyState:'complete',querySelector:selector=>selector.includes('Profile_Link')?null:(selectedTab===null?null:{textContent:selectedTab})},
+  const c=vm.createContext({setInterval(){},window:{addEventListener(){}},
+    document:{addEventListener(){},readyState:'complete',querySelector:selector=>selector.includes('Profile_Link')?null:(selectedTab===null?null:{textContent:selectedTab})},
     location:{pathname,href:'https://x.com'+pathname},
-    chrome:{runtime:{onMessage:{addListener(f){listener=f}}}}});
+    chrome:{runtime:{sendMessage:async()=>({ok:true}),onMessage:{addListener(f){listener=f}}}}});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../extension/content.js'),'utf8'),c);
   let result;listener({type:'ping'},{},r=>result=r);return result;
 }
@@ -170,7 +170,7 @@ async function interceptFixture(data,operation='Bookmarks') {
  const messages=[],listeners={};
  function XHR(){};XHR.prototype.open=function(){};XHR.prototype.send=function(){};
  const win={fetch:async()=>({clone:()=>({json:async()=>data})}),addEventListener:(type,fn)=>{listeners[type]=fn},postMessage:msg=>messages.push(msg)};
- const c=vm.createContext({document:{querySelector:()=>({getAttribute:()=>'/fixture'})},window:win,XMLHttpRequest:XHR});
+ const c=vm.createContext({setInterval(){},document:{querySelector:()=>({getAttribute:()=>'/fixture'})},window:win,XMLHttpRequest:XHR});
  vm.runInContext(fs.readFileSync(path.join(__dirname,'../extension/injected.js'),'utf8'),c);
  await win.fetch('https://x.com/i/api/graphql/fake/'+operation);await new Promise(setImmediate);
  listeners.message({source:win,data:{__xbm:true,type:'get-buffer'}});
@@ -257,7 +257,7 @@ test('in-flight responses from previous login are discarded',async()=>{
  const payload={data:{timeline:{instructions:[{tweet_results:{result:{legacy:{id_str:'123'}}}}]}}};
  function XHR(){};XHR.prototype.open=function(){};XHR.prototype.send=function(){};
  const win={fetch:()=>new Promise(resolve=>resolveResponse=resolve),addEventListener:(t,fn)=>listeners[t]=fn,postMessage:m=>messages.push(m)};
- const c=vm.createContext({window:win,XMLHttpRequest:XHR,document:{querySelector:()=>({getAttribute:()=>'/'+handle})}});
+ const c=vm.createContext({setInterval(){},window:win,XMLHttpRequest:XHR,document:{querySelector:()=>({getAttribute:()=>'/'+handle})}});
  vm.runInContext(fs.readFileSync(path.join(__dirname,'../extension/injected.js'),'utf8'),c);
  const request=win.fetch('https://x.com/i/api/graphql/fake/Bookmarks');handle='beta';
  resolveResponse({clone:()=>({json:async()=>payload})});await request;await new Promise(setImmediate);
@@ -270,7 +270,21 @@ test('capture owner comes from logged-in profile entry rather than tweet author'
  assert.equal(result.account,'x:fixture');assert.equal(result.tweets[0].screen_name,'other_author');
 });
 test('content readiness reports normalized logged-in profile handle',()=>{
- let listener;const c=vm.createContext({window:{addEventListener(){}},document:{readyState:'complete',querySelector:selector=>selector.includes('Profile_Link')?{getAttribute:()=>'/Login_Account'}:{textContent:'Bookmarks'}},location:{href:'https://x.com/i/history',pathname:'/i/history'},chrome:{runtime:{onMessage:{addListener:f=>listener=f}}}});
+ let listener;const c=vm.createContext({setInterval(){},window:{addEventListener(){}},document:{addEventListener(){},readyState:'complete',querySelector:selector=>selector.includes('Profile_Link')?{getAttribute:()=>'/Login_Account'}:{textContent:'Bookmarks'}},location:{href:'https://x.com/i/history',pathname:'/i/history'},chrome:{runtime:{sendMessage:async()=>({ok:true}),onMessage:{addListener:f=>listener=f}}}});
  vm.runInContext(fs.readFileSync(path.join(__dirname,'../extension/content.js'),'utf8'),c);
  let result;listener({type:'ping'},{},r=>result=r);assert.equal(result.account,'x:login_account');
+});
+
+test('account observation reports identity without collecting bookmarks and persists before network failure',async()=>{
+ const h=setup({});h.context.fetch=async()=>{throw new Error('offline');};
+ await assert.rejects(vm.runInContext("reportBrowserAccount('x:fixture', 123000)",h.context),/offline/);
+ assert.equal(h.stored.xbm_current_account,'x:fixture');assert.equal(h.stored.xbm_account_observed_at,123000);
+});
+test('settings page reports login identity and detects an account switch without opening bookmarks',async()=>{
+ let handle='alpha',tick;const messages=[];
+ const c=vm.createContext({Date,setInterval:fn=>tick=fn,window:{addEventListener(){}},document:{addEventListener(){},querySelector:()=>({getAttribute:()=>'/'+handle})},location:{pathname:'/settings/account'},chrome:{runtime:{sendMessage:async msg=>{messages.push(msg);return {ok:true};},onMessage:{addListener(){}}}}});
+ vm.runInContext(fs.readFileSync(path.join(__dirname,'../extension/content.js'),'utf8'),c);
+ await new Promise(setImmediate);handle='beta';tick();await new Promise(setImmediate);
+ assert.deepEqual(messages.map(m=>m.type),['account-observed','account-observed']);
+ assert.deepEqual(messages.map(m=>m.account),['x:alpha','x:beta']);
 });

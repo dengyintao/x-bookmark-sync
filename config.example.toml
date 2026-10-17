@@ -34,3 +34,7 @@ extra_args = ["--no-check-certificate"]
 # dir = ""
 max_retries = 5   # 单个文件失败重试上限
 workers = 2       # 并发下载线程数
+
+# 旧数据归属备份；留空使用运行用户 ~/.local/share/xbm/migrations
+[migration]
+backup_dir = ""

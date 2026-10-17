@@ -503,3 +503,227 @@ setInterval(() => {
   status();
   if (view !== "bookmarks" && !loading) load();
 }, 3000);
+
+// Ownership preview remains visible while only the durable task history polls.
+let ownershipPlan = null;
+let ownershipGeneration = 0;
+const operationLabels = {
+  queued: "排队中",
+  running: "正在迁移",
+  completed: "归属完成",
+  failed: "失败，未完成迁移",
+  interrupted: "已中断，请重新预览",
+  rolled_back: "已撤销归属",
+  rolling_back: "正在撤销",
+};
+let ownershipHistoryGeneration = 0;
+let ownershipHistorySignature = "";
+async function ownershipHistory() {
+  const generation = ++ownershipHistoryGeneration;
+  try {
+    const data = await api("/api/migrations");
+    if (generation !== ownershipHistoryGeneration) return;
+    const signature = JSON.stringify(data.items);
+    if (signature === ownershipHistorySignature) return;
+    ownershipHistorySignature = signature;
+    const openJobs = new Set(
+      Array.from($("ownership-history").querySelectorAll("details[open]")).map(
+        (row) => row.dataset.job,
+      ),
+    );
+    const nodes = data.items.map((job) => {
+      const row = el("details");
+      row.dataset.job = job.id;
+      row.open = openJobs.has(job.id);
+      row.append(
+        el(
+          "summary",
+          date(job.created_at) +
+            " · @" +
+            job.account.slice(2) +
+            " · " +
+            (operationLabels[job.status] || job.status),
+        ),
+      );
+      const result = job.result || {};
+      if (result.imported)
+        row.append(
+          el(
+            "p",
+            `旧回执记录：${result.tweets} 条书签、${result.media} 个媒体、${result.runs} 条同步记录；未重新执行迁移，原备份继续保留。`,
+            "view-note",
+          ),
+        );
+      if (result.validated)
+        row.append(
+          el(
+            "p",
+            `${result.tweets} 条书签、${result.media} 个媒体、${result.runs} 条同步记录；文件和数量校验通过。`,
+          ),
+        );
+      if (result.backup)
+        row.append(el("p", "备份：" + result.backup, "view-note"));
+      if (job.error) row.append(el("p", job.error, "error"));
+      if (job.status === "completed" && result.after_token) {
+        const undo = el("button", "撤销此次归属", "outline");
+        undo.addEventListener("click", async () => {
+          if (
+            !confirm(
+              "确认撤销此次归属？程序会先检查是否有新数据；发生变化时会拒绝覆盖。",
+            )
+          )
+            return;
+          undo.disabled = true;
+          try {
+            await api("/api/migrations/" + job.id + "/rollback", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-XBM-Action": "migrate",
+              },
+              body: "{}",
+            });
+            ownershipHistory();
+            status();
+            load();
+          } catch (error) {
+            $("ownership-plan").textContent = error.message;
+            undo.disabled = false;
+          }
+        });
+        row.append(undo);
+      }
+      return row;
+    });
+    $("ownership-history").replaceChildren(
+      ...(nodes.length ? nodes : [el("p", "暂无归属任务", "view-note")]),
+    );
+  } catch (error) {
+    $("ownership-history").textContent = error.message;
+  }
+}
+async function readObservedAccount() {
+  const data = await api("/api/browser-account");
+  if (!data.observed)
+    throw new Error(
+      "尚未收到插件识别信息。请在已登录的浏览器打开或刷新 X 页面，等待约 15 秒后重试。",
+    );
+  await refreshAccounts();
+  $("ownership-target").replaceChildren(
+    ...Array.from($("account").options)
+      .filter((o) => o.value)
+      .map((o) => {
+        const option = el("option", o.textContent);
+        option.value = o.value;
+        return option;
+      }),
+  );
+  $("ownership-target").value = data.observed.account;
+  $("ownership-account-note").textContent =
+    "最近由插件识别：@" +
+    data.observed.account.slice(2) +
+    " · " +
+    date(data.observed.observed_at) +
+    "。请确认这是旧数据所属的账户。";
+}
+function clearOwnershipPlan() {
+  ownershipGeneration++;
+  ownershipPlan = null;
+  $("ownership-confirm").hidden = true;
+  $("ownership-plan").replaceChildren();
+}
+$("ownership-open").addEventListener("click", async () => {
+  clearOwnershipPlan();
+  $("ownership").showModal();
+  try {
+    await refreshAccounts();
+    $("ownership-target").replaceChildren(
+      ...Array.from($("account").options)
+        .filter((o) => o.value)
+        .map((o) => {
+          const option = el("option", o.textContent);
+          option.value = o.value;
+          return option;
+        }),
+    );
+    if (selectedAccount) $("ownership-target").value = selectedAccount;
+    $("ownership-account-note").textContent =
+      "可从插件读取最近识别的登录账户，或手动选择已知账户。";
+  } catch (error) {
+    $("ownership-plan").textContent = error.message;
+  }
+  ownershipHistory();
+});
+$("ownership-close").addEventListener("click", () => $("ownership").close());
+$("ownership-target").addEventListener("change", clearOwnershipPlan);
+$("ownership-read").addEventListener("click", async () => {
+  clearOwnershipPlan();
+  try {
+    await readObservedAccount();
+  } catch (error) {
+    $("ownership-account-note").textContent = error.message;
+  }
+});
+$("ownership-preview").addEventListener("click", async () => {
+  clearOwnershipPlan();
+  const token = ownershipGeneration;
+  const account = $("ownership-target").value;
+  try {
+    if (!account) throw new Error("请先让插件识别一个登录账户");
+    const plan = await api(
+      "/api/migrations/preview?target=" + encodeURIComponent(account),
+    );
+    if (token !== ownershipGeneration) return;
+    ownershipPlan = plan;
+    $("ownership-plan").replaceChildren(
+      el(
+        "p",
+        `目标 @${account.slice(2)}：${plan.tweets} 条书签、${plan.media_files} 个媒体、${plan.sync_runs} 条同步记录。`,
+      ),
+      el(
+        "p",
+        `重复书签 ${plan.duplicate_tweets} 条，重复媒体 ${plan.duplicate_media} 个，将合并而不是重复入库。`,
+        "view-note",
+      ),
+    );
+    if (plan.busy)
+      $("ownership-plan").append(
+        el("p", "仍有下载正在进行，请等待完成后重新预览。"),
+      );
+    if (plan.errors.length)
+      $("ownership-plan").append(el("p", plan.errors.join("；")));
+    if (!plan.tweets && !plan.media_files && !plan.sync_runs)
+      $("ownership-plan").append(el("p", "未归属库为空，无需重复迁移。"));
+    $("ownership-confirm").textContent = "确认归属到 @" + account.slice(2);
+    $("ownership-confirm").hidden = !plan.ready;
+  } catch (error) {
+    $("ownership-plan").textContent = error.message;
+  }
+});
+$("ownership-confirm").addEventListener("click", async () => {
+  if (!ownershipPlan) return;
+  const plan = ownershipPlan;
+  $("ownership-confirm").disabled = true;
+  try {
+    await api("/api/migrations", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-XBM-Action": "migrate",
+      },
+      body: JSON.stringify({ account: plan.account, token: plan.token }),
+    });
+    ownershipPlan = null;
+    $("ownership-confirm").hidden = true;
+    $("ownership-plan").textContent =
+      "归属任务已提交。下方记录会自动更新，关闭页面不会取消任务。";
+    ownershipHistory();
+  } catch (error) {
+    $("ownership-plan").textContent = error.message;
+  } finally {
+    $("ownership-confirm").disabled = false;
+  }
+});
+setInterval(() => {
+  if ($("ownership").open && !document.hidden) ownershipHistory();
+}, 3000);

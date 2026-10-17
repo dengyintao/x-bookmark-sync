@@ -111,6 +111,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         from . import web
         parts = urlsplit(self.path)
+        if web.management(self, 'GET'):
+            return
         if parts.path == '/api/accounts':
             self._json(200, {"ok": True, "items": self.accounts.list()})
             return
@@ -135,6 +137,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         from . import web
+        if web.management(self, 'POST'):
+            return
         if urlsplit(self.path).path != '/api/ingest':
             if not self._select_account(parse_qs(urlsplit(self.path).query).get('account', [''])[0]):
                 return
@@ -194,9 +198,12 @@ class Handler(BaseHTTPRequestHandler):
 def make_server(cfg: Config, port: int) -> ThreadingHTTPServer:
     cfg.state_dir.mkdir(parents=True, exist_ok=True)
     accounts = AccountManager(cfg)
+    from .migration import Migrations
+    migrations = Migrations(accounts)
     store = accounts.get('')[1]
-    handler = type("XbmHandler", (Handler,), {"config": cfg, "store": store, "accounts": accounts})
+    handler = type("XbmHandler", (Handler,), {"config": cfg, "store": store, "accounts": accounts, "migrations": migrations})
     server = ThreadingHTTPServer(("0.0.0.0", port), handler)
+    server._xbm_migrations = migrations
     server._xbm_accounts = accounts
     server._xbm_store = store  # for graceful shutdown
     return server
@@ -212,5 +219,6 @@ def run(cfg: Config, port: int = 8765) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        server._xbm_migrations.close()
         accounts.close()
         server.server_close()

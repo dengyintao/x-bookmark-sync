@@ -25,6 +25,21 @@
     return 'x:' + match[1].toLowerCase();
   }
 
+  let reportedAccount = '';
+  function reportAccount() {
+    const account = currentAccount();
+    if (account && account !== reportedAccount) {
+      chrome.runtime.sendMessage({ type: 'account-observed', account, observedAt: Date.now() }).then(result => {
+        if (result && result.ok) reportedAccount = account;
+      }).catch(function () {});
+    }
+  }
+  // Profile navigation is available on settings/home too; no bookmark collection
+  // or cookie access is needed to identify the logged-in account.
+  document.addEventListener('DOMContentLoaded', reportAccount);
+  setInterval(reportAccount, 15000);
+  reportAccount();
+
   // 转发 injected.js 推送的实时捕获（用户被动浏览场景）
   window.addEventListener('message', function (ev) {
     if (ev.source !== window || !ev.data || ev.data.__xbm !== true) return;

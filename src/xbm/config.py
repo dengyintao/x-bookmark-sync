@@ -32,6 +32,7 @@ class DownloadConfig:
 @dataclass
 class Config:
     data_root: Path
+    migration_backup_dir: str = ""
     page_size: int = 20
     max_pages: int = 10
     request_delay: float = 1.5
@@ -81,6 +82,7 @@ def load(path: Path | None = None) -> Config:
     root = d.get("root") or str(Path.home() / "x-bookmarks")
     return Config(
         data_root=Path(root).expanduser(),
+        migration_backup_dir=data.get("migration", {}).get("backup_dir", ""),
         page_size=int(s.get("page_size", 20)),
         max_pages=int(s.get("max_pages", 10)),
         request_delay=float(s.get("request_delay", 1.5)),

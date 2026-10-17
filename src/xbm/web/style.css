@@ -593,3 +593,38 @@ button {
     display: none;
   }
 }
+
+#ownership label {
+  display: block;
+  margin: 12px 0 6px;
+}
+#ownership-target {
+  width: 100%;
+}
+.ownership-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 16px 0;
+}
+#ownership-plan {
+  margin: 18px 0;
+}
+#ownership-history details {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+#ownership-history p {
+  overflow-wrap: anywhere;
+}
+#ownership h3 {
+  margin-top: 28px;
+  font-size: 15px;
+}
+header {
+  gap: 10px;
+  flex-wrap: wrap;
+}
+header > div {
+  margin-right: auto;
+}
