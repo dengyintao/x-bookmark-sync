@@ -5,31 +5,90 @@
 - 路线：**Chrome 扩展被动拦截 + 服务端下载**（不使用付费 API；仍受登录、限流和页面改版影响）
 - 详细设计见 [DESIGN.md](DESIGN.md)
 
-## 快速开始
+## 安装与首次使用
 
-### 服务端（NAS / 本机）
+### 飞牛 NAS：安装独立 FPK（推荐）
 
-```bash
-# 1. 建虚拟环境（Python 3.11+）
-python3 -m venv .venv && . .venv/bin/activate
-pip install -e .
+适用：x86_64 飞牛 fnOS 1.2.0401 及以上。独立包已经包含 Python、服务端和下载依赖，无需安装 Docker、Python 或手动创建服务。
 
-# 2. 配置
-cp config.example.toml config.toml
-# 按需改 data.root（NAS 上的落地目录）
+1. 打开 [最新 Release](https://github.com/dengyintao/x-bookmark-sync/releases/latest)，下载 `.fpk` 和 `x-bookmark-extension-*.zip`。可同时下载 `SHA256SUMS` 校验文件完整性。
+2. 登录飞牛网页管理后台，打开 **应用中心 → 手动安装**，选择 FPK，按向导选择有足够空间的存储位置并安装。建议至少预留 1 GB 程序安装空间；书签媒体需要另计。
+3. 在应用中心启动“X 书签库”，点击桌面图标；也可访问 `http://NAS局域网IP:8765/`。
+4. 新安装会创建空书签库。按下面的步骤安装浏览器扩展并设置 NAS 地址，完成第一次同步。
 
-# 3. 启动服务（含 POST /api/ingest 去重入库）
-xbm serve --port 8765
+若 NAS 上已有手工部署的 `xbm.service`，先备份数据并停止旧服务以释放 8765 端口；详见下方“升级、备份与旧服务迁移”。不要同时启动两个服务。
+
+### 安装浏览器扩展
+
+1. 解压 Release 的 `x-bookmark-extension-*.zip` 到一个固定目录，之后不要移动或删除这个目录。
+2. Chrome / Edge 打开 `chrome://extensions` / `edge://extensions`，启用 **开发者模式**，点击 **加载已解压的扩展程序**，选择包含 `manifest.json` 的目录。
+3. 点扩展图标，进入设置，将服务端地址设为 `http://NAS局域网IP:8765`，例如 `http://192.168.1.10:8765`，点击 **测试连接**。这里不能填浏览器本机的 `127.0.0.1`，也不要填 `/#runs` 等页面路径。
+4. 在同一浏览器登录 `x.com`，打开自己的 **书签** 页面。确认插件识别的 @用户名正确，再点 **立即同步书签**。插件使用已有标签页，不会新开标签页。
+5. 保留已登录的书签页，以便定时采集。安装或更新扩展后要刷新 X 页面；首次同步只采集当前流程能加载到的书签，历史回填受页面加载、限流和轮数限制。
+
+扩展详细设置见 [extension/README.md](extension/README.md)。
+
+### 判断同步是否成功
+
+1. 查看扩展任务状态：**捕获数量**是浏览器采集数量；**待传数量**大于零表示仍未送达 NAS。出现“等待补传 / Failed to fetch”时检查连接，队列会保留并重试。
+2. 打开 NAS 管理页，在左侧选择登录的 X 账户，进入 **同步记录**，确认有新的接收记录和收到/新增数量。插件捕获 0 条并不代表已有书签已全部同步。
+3. 进入 **全部书签**查找刚同步的书签；进入 **下载队列**检查媒体状态。元数据提交成功与媒体下载完成是两个阶段。
+4. 切换 X 账号后，插件按新识别的 @用户名分库；NAS 页面也需要切换对应账户。旧无账户数据可通过 **旧数据归属**预览后迁入，具体流程见下文。
+
+### 配置数据目录、代理和日志
+
+FPK 的配置位于 `/var/apps/x-bookmark-sync/etc/config.toml`，默认数据目录为 `/var/apps/x-bookmark-sync/var/data`，日志为 `/var/apps/x-bookmark-sync/var/server.log`。这些路径链接到所选存储空间，升级不会覆盖配置和数据。
+
+需要自定义目录或应用代理时，先在应用中心停止程序，编辑配置，再启动：
+
+```toml
+[data]
+root = "/your/accessible/path/x-bookmarks"
+
+[proxy]
+url = "http://127.0.0.1:7890" # 可选；已有透明代理时通常留空或省略
+
+[migration]
+backup_dir = "/your/accessible/path/ownership-backups"
 ```
 
-### Chrome 扩展
+自定义路径必须允许专用用户 `x-bookmark-sync` 遍历父目录并读写数据目录。不要将代理凭据或 X cookie 提交到 Git。浏览器扩展采集无需向 NAS 提供 X cookie。
 
-1. Chrome 打开 `chrome://extensions`，打开开发者模式 → 「加载已解压的扩展程序」→ 选择 `extension/` 目录。
-2. 点扩展图标 → 设置服务端地址（如 `http://192.168.1.10:8765`）→ 「测试连接」。
-3. 在 x.com 登录 X 账号（哪个号登录就同步哪个号的书签，无需小号）。
-4. 打开 X 书签页（历史页面请选择“书签”），点「立即同步书签」；之后每小时从已有书签页采集，不再自动新建或关闭标签页。
+### 升级、备份与旧服务迁移
 
-详见 [extension/README.md](extension/README.md)。
+- **FPK 升级**：备份配置、整个数据目录和迁移备份目录后，使用新版 FPK 覆盖安装；启动后检查版本、账户、书签数量和同步记录。扩展有新版本时更新其目录，在扩展管理页点“重新加载”，再刷新 X 页面。
+- **一致性备份**：停止应用后再复制整个数据目录，包含 `.xbm`、`accounts` 和媒体。若配置单独指定了下载或迁移备份目录，也应一并备份。不要只复制单个数据库后漏掉账户库。
+- **旧 systemd 部署迁移**：备份后执行 `sudo systemctl disable --now xbm.service`；安装新 FPK，停止应用，将旧 `config.toml` 复制到 FPK 配置目录。保持旧数据路径并授予应用用户访问权限，或停服复制到新目录后修改 `[data].root`。确认权限、启动和数据无误后再决定是否清理旧程序。
+- **卸载**：选择飞牛的“保留应用数据”，并事先备份。卸载脚本不会主动删除书签，但系统选择删除应用数据仍可能清除默认目录。
+
+### 常见问题
+
+| 现象 | 检查方法 |
+| --- | --- |
+| FPK 启动失败 | 查看 `server.log`，确认 8765 端口未被旧服务占用、安装卷有剩余空间、数据路径可写。 |
+| 插件连接失败 / 等待补传 | 从插件所在电脑打开 `http://NAS地址:8765/api/status`；检查 IP、端口、防火墙和 ZeroTier 路由。 |
+| 未识别 X 账户 | 刷新已登录的 X 页面，确认本人资料入口可用；不要将作者账号当作登录账号。 |
+| 同步记录收到 0 条 | 确认 X 书签页已加载且有书签，刷新页面后重试；查看插件捕获数量和错误。 |
+| 书签已收到但媒体失败 | 检查 NAS 到媒体 CDN 的网络、代理、磁盘空间及下载队列错误；网络恢复后重试失败任务。 |
+
+API 当前没有独立鉴权，请仅在可信局域网或受控 VPN 中使用，勿直接开放到公网。
+
+### 其他 NAS / 本机：Python 部署
+
+需要 Python 3.11+。先克隆仓库并进入目录：
+
+```bash
+git clone https://github.com/dengyintao/x-bookmark-sync.git
+cd x-bookmark-sync
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -e .
+cp config.example.toml config.toml
+# 编辑 config.toml 中的 data.root 和可选代理配置
+xbm --config config.toml serve --port 8765
+```
+
+打开 `http://主机IP:8765/`，再按上述步骤设置浏览器扩展。需要 HLS 下载时额外安装 FFmpeg；长期运行可自行配置 systemd。
 
 ## 目录结构
 
