@@ -133,3 +133,19 @@ backup_dir = "/path/to/ownership-backups"
 归属任务日志位于 `{data.root}/.xbm/operations.db`。两个库使用 SQLite DELETE 日志模式下的附加数据库事务，原库清空与目标库写入一起提交。服务重启会用目标库事务标记确认是否已经提交，避免重复迁移；未提交任务回滚并清理临时文件，记录为中断。此前离线工具在运行用户家目录产生的 `xbm-account-migration-*/receipt.json` 会被导入历史记录，不会重新执行。
 
 备份与原媒体应保留到确认无误。备份是停服灾难恢复的依据；不要直接覆盖仍有新数据的数据库。账户分类仍不等于访问鉴权，本服务继续用于可信私有网络。
+
+## 自动构建与 Release
+
+GitHub Actions 在 main 推送、PR 或手动触发时执行服务端和扩展行为测试，随后构建并上传 `xbm-release-assets` Artifact（保留 30 天）。推送 `v{项目版本}` 标签会在相同检查通过后自动创建正式 GitHub Release，附带 FPK、Python wheel、插件 ZIP、源码 tar.gz 和 SHA256SUMS。
+
+版本标签、pyproject.toml 和 FPK manifest 必须一致；扩展 ZIP 使用独立的 manifest 版本。fnpack 固定为官方 1.2.3，下载后验证 SHA256。FPK 当前是已部署 xbm.service 的桌面入口包，不能替代首次服务端安装。
+
+本地复现：
+
+```sh
+python3 -m pip install "setuptools>=61" wheel
+python3 scripts/build_release.py --fnpack /path/to/fnpack --tag v0.4.0
+# 所有产物位于 dist/release/
+```
+
+源码包来自当前提交的 git archive；本地未提交改动不会打入源码包。发布前先提交改动，再推送对应版本标签。
