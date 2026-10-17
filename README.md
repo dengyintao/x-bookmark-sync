@@ -52,7 +52,7 @@ url = "http://127.0.0.1:7890" # 可选；已有透明代理时通常留空或省
 backup_dir = "/your/accessible/path/ownership-backups"
 ```
 
-自定义路径必须允许专用用户 `x-bookmark-sync` 遍历父目录并读写数据目录。不要将代理凭据或 X cookie 提交到 Git。浏览器扩展采集无需向 NAS 提供 X cookie。
+自定义路径必须允许专用用户 `x-bookmark-sync` 遍历父目录并读写数据目录。飞牛个人目录可能受 `trimacl` 控制，普通 `setfacl` 授权仍可能无法写入；遇到只读数据库错误，优先停服复制到应用默认数据目录，并将数据库中已有媒体的绝对路径一并调整，不要直接修改全卷权限。不要将代理凭据或 X cookie 提交到 Git。浏览器扩展采集无需向 NAS 提供 X cookie。
 
 ### 升级、备份与旧服务迁移
 
