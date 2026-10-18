@@ -105,9 +105,16 @@ function bytes(n) {
   }
   return `${n.toFixed(i ? 1 : 0)} ${units[i]}`;
 }
+async function dashboardHeaders(headers = {}) {
+  const response = await fetch('/api/dashboard-token', {cache:'no-store',credentials:'same-origin',signal:AbortSignal.timeout(10000)});
+  const data = await response.json();
+  if (!response.ok || !data.ok || !data.token) throw new Error('请刷新管理页面后重试');
+  return {...headers,'X-XBM-Dashboard':data.token};
+}
 async function api(path, options = {}) {
   if (!authenticated) throw new Error("请先登录管理页面");
   const authStamp = authGeneration;
+  if ((options.method || 'GET').toUpperCase() === 'POST') options = {...options,headers:await dashboardHeaders(options.headers)};
   const r = await fetch(path === "/api/accounts" ? path : accountUrl(path), {
     ...options,
     signal: AbortSignal.timeout(12000),
@@ -816,7 +823,7 @@ async function unlockDashboard() {
 }
 async function accessRequest(path, data) {
   const response = await fetch(path, {method:"POST", credentials:"same-origin", redirect:"error",
-    headers:{"Content-Type":"application/json", "X-XBM-Action":"access"},
+    headers:await dashboardHeaders({"Content-Type":"application/json", "X-XBM-Action":"access"}),
     body:JSON.stringify(data), signal:AbortSignal.timeout(10000)});
   const result = await response.json();
   if (!response.ok || !result.ok) {

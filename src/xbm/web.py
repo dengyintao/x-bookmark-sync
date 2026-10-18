@@ -233,6 +233,12 @@ def same_origin(handler, action):
     """
     if handler.headers.get('X-XBM-Action') != action:
         return False
+    proof = handler.headers.get('X-XBM-Dashboard')
+    if proof:
+        if getattr(handler, '_dashboard_verified', False):return True
+        valid = getattr(handler, 'dashboard', None) and handler.dashboard.consume(proof)
+        handler._dashboard_verified = bool(valid)
+        return bool(valid)
     site = handler.headers.get('Sec-Fetch-Site')
     if site == 'cross-site':
         return False

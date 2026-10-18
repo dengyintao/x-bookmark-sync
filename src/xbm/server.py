@@ -110,6 +110,10 @@ class Handler(BaseHTTPRequestHandler):
         if method == 'GET' and path in public_assets:
             web.get(self)
             return False
+        if method == 'GET' and path == '/api/dashboard-token':
+            from .dashboard import serve_token
+            serve_token(self)
+            return False
         if method == 'GET' and path == '/api/health':
             self._json(200, {'ok': True, 'service': 'xbm', 'version': __version__,
                              'protocol_version': 1, 'pairing_required': self.access is not None})
@@ -204,6 +208,7 @@ class Handler(BaseHTTPRequestHandler):
         return False
 
     def do_GET(self):
+        self._dashboard_verified = False
         if not self._access_gate():
             return
         from . import web
@@ -243,6 +248,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(404, {"ok": False, "error": "not found"})
 
     def do_POST(self):
+        self._dashboard_verified = False
         if not self._access_gate():
             return
         from . import web
@@ -307,6 +313,8 @@ class Handler(BaseHTTPRequestHandler):
 def make_server(cfg: Config, port: int, *, require_auth: bool = True) -> ThreadingHTTPServer:
     cfg.state_dir.mkdir(parents=True, exist_ok=True)
     from .access import Access
+    from .dashboard import DashboardTokens
+    dashboard = DashboardTokens()
     access = Access(cfg.state_dir) if require_auth else None
     accounts = AccountManager(cfg)
     from .migration import Migrations
@@ -314,7 +322,7 @@ def make_server(cfg: Config, port: int, *, require_auth: bool = True) -> Threadi
     from .storage import Storage
     storage = Storage(accounts)
     store = accounts.get('')[1]
-    handler = type("XbmHandler", (Handler,), {"config": cfg, "store": store, "accounts": accounts, "migrations": migrations, "access": access, "storage": storage})
+    handler = type("XbmHandler", (Handler,), {"config": cfg, "store": store, "accounts": accounts, "migrations": migrations, "access": access, "storage": storage, "dashboard":dashboard})
     server = ThreadingHTTPServer(("0.0.0.0", port), handler)
     server._xbm_storage = storage
     server._xbm_access = access

@@ -146,6 +146,19 @@ class AccessHTTP(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=2) as pool:
             self.assertEqual(sum(token is not None for token in pool.map(redeem,range(2))),1)
 
+    def test_one_use_intent_proof_handles_rewritten_headers_without_cors_exposure(self):
+        import urllib.request
+        with urllib.request.urlopen(self.base+'/api/dashboard-token') as response:
+            self.assertIsNone(response.headers.get('Access-Control-Allow-Origin'))
+            proof=json.load(response)['token']
+        _,headers=self.call('/api/access/login',{'key':self.key},headers={'X-XBM-Action':'access'})
+        cookie=headers['Set-Cookie'].split(';')[0]
+        self.call('/api/ingest',{'tweets':[{'tweet_id':'777','text':'synthetic'}]},self.key)
+        action={'X-XBM-Action':'bookmarks','X-XBM-Dashboard':proof,'Origin':'null','Sec-Fetch-Site':'cross-site'}
+        self.call('/api/bookmarks/delete',{'ids':['777']},cookie=cookie,headers=action)
+        self.denied('/api/bookmarks/restore',403,body={'ids':['777']},cookie=cookie,headers=action)
+        self.assertEqual(self.call('/api/bookmarks?trash=1',token=self.key)[0]['total'],1)
+
 class OriginChecks(unittest.TestCase):
     def test_reverse_proxy_host_rewrite_retains_browser_same_origin_evidence(self):
         from types import SimpleNamespace
