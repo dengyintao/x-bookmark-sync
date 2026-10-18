@@ -128,7 +128,22 @@ def serve_media(handler, media_id: int) -> None:
 
 def post(handler) -> bool:
     path = urlsplit(handler.path).path
-    if path in {'/api/bookmarks/delete', '/api/bookmarks/restore'}:
+    if path == '/api/storage/policy':
+        import json
+        if not same_origin(handler, 'storage'):
+            handler._json(403, {'ok':False,'error':'请从已登录的存储管理页面操作'})
+            return True
+        try:
+            length = int(handler.headers.get('Content-Length', 0))
+            if not 0 < length <= 4096:raise ValueError('invalid body')
+            data = json.loads(handler.rfile.read(length))
+            if not isinstance(data,dict):raise ValueError('invalid body')
+            handler.store.set_download_policy(data.get('mode'),data.get('budget'),data.get('paused'))
+            handler._json(200, {'ok':True,'policy':handler.store.download_policy()})
+        except (ValueError,TypeError) as error:
+            handler._json(400, {'ok':False,'error':str(error)})
+        return True
+    if path in {'/api/bookmarks/delete', '/api/bookmarks/restore', '/api/bookmarks/purge'}:
         import json
         if not same_origin(handler, 'bookmarks'):
             handler._json(403, {'ok': False, 'error': '请刷新管理页面后重试；若通过代理访问，请打开 NAS 的直接地址操作', 'code':'dashboard_origin_required'})
@@ -140,8 +155,12 @@ def post(handler) -> bool:
             data = json.loads(handler.rfile.read(length))
             if not isinstance(data, dict):
                 raise ValueError('invalid request body')
-            changed = handler.store.set_deleted(data.get('ids'), path.endswith('/restore'))
-            handler._json(200, {'ok': True, 'changed': changed})
+            if path.endswith('/purge'):
+                result = handler.storage.purge(handler.account, data.get('ids'))
+                handler._json(200, {'ok': True, **result})
+            else:
+                changed = handler.store.set_deleted(data.get('ids'), path.endswith('/restore'))
+                handler._json(200, {'ok': True, 'changed': changed})
         except (ValueError, TypeError) as error:
             handler._json(400, {'ok': False, 'error': str(error)})
         return True

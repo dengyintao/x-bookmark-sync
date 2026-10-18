@@ -480,12 +480,14 @@ function navigate() {
 function selectionStatus() {
   $('selection-count').textContent = selectedIds.size ? `已选 ${selectedIds.size} 条` : '';
   $('delete-selected').disabled = !selectedIds.size;
+  $('purge-selected').hidden = $('trash').value !== '1';
+  $('purge-selected').disabled = !selectedIds.size;
   $('delete-selected').textContent = $('trash').value === '1' ? '恢复所选' : '删除所选';
 }
 async function changeBookmarks(ids, account = selectedAccount) {
   if(account !== selectedAccount || loading) return;
   const restore = $('trash').value === '1';
-  if (!confirm(restore ? `恢复 ${ids.length} 条书签？` : `将 ${ids.length} 条书签移入回收站？本地文件保留，可恢复；不影响 X 上的收藏。`)) return;
+  if (!await confirmAction(restore ? `恢复 ${ids.length} 条书签？` : `将 ${ids.length} 条书签移入回收站？本地文件保留，可恢复；不影响 X 上的收藏。`)) return;
   try {
     await api('/api/bookmarks/' + (restore ? 'restore' : 'delete'), {method:'POST', headers:{'Content-Type':'application/json','X-XBM-Action':'bookmarks'}, body:JSON.stringify({ids})});
     notice(restore ? '已恢复书签。' : '已移入回收站；保留本地文件，不会因再次同步自动恢复。');
@@ -615,7 +617,7 @@ async function ownershipHistory() {
         const undo = el("button", "撤销此次归属", "outline");
         undo.addEventListener("click", async () => {
           if (
-            !confirm(
+            !await confirmAction(
               "确认撤销此次归属？程序会先检查是否有新数据；发生变化时会拒绝覆盖。",
             )
           )
@@ -872,3 +874,49 @@ $("logout").onclick = async () => {
   try { await accessRequest("/api/access/logout", {}); lockDashboard(); }
   catch (error) { $("pair-result").textContent = error.message; }
 };
+
+$('purge-selected').onclick = async () => {
+  if ($('trash').value !== '1' || !selectedIds.size || loading) return;
+  const ids = [...selectedIds];
+  if (!await confirmAction(`彻底删除 ${ids.length} 条书签及其本地文件？此操作无法恢复，不影响 X 上的收藏。`)) return;
+  try {
+    const result = await api('/api/bookmarks/purge', {method:'POST',headers:{'Content-Type':'application/json','X-XBM-Action':'bookmarks'},body:JSON.stringify({ids})});
+    notice(`已彻底删除 ${result.purged} 条；${result.cleanup_pending ? '部分文件等待清理，请查看存储管理。' : '文件清理已完成，共享引用文件会保留。'}`);
+    await load(); await status();
+  } catch (error) { notice(error.message); }
+};
+$('storage-close').onclick = () => $('storage-dialog').close();
+$('storage-open').onclick = async () => {
+  $('storage-dialog').showModal(); $('storage-result').textContent = '检查中…';
+  try {
+    const data = await api('/api/storage');
+    $('download-mode').value = data.policy.mode;
+    $('download-budget').value = data.policy.budget / (1024 ** 3);
+    $('download-paused').checked = !!data.policy.paused;
+    $('storage-result').textContent = `所选账户媒体记录：${bytes(data.media_bytes)} · 回收站 ${data.trash_count} 条 · 待清理文件 ${data.cleanup_pending} 个 · 存储卷剩余 ${bytes(data.free_bytes)} / ${bytes(data.total_bytes)}`;
+  } catch (error) { $('storage-result').textContent = error.message; }
+};
+
+$('storage-policy-form').onsubmit = async event => {
+  event.preventDefault();
+  try {
+    const result = await api('/api/storage/policy', {method:'POST',headers:{'Content-Type':'application/json','X-XBM-Action':'storage'},body:JSON.stringify({mode:$('download-mode').value,budget:Math.round(Number($('download-budget').value)*1024**3),paused:$('download-paused').checked})});
+    $('storage-result').textContent = result.policy.budget_reached ? '已保存，媒体预算已达到，新任务暂停。' : '下载设置已保存。正在进行的任务不受影响。';
+  } catch (error) { $('storage-result').textContent = error.message; }
+};
+
+let confirmationResolve = null;
+function confirmAction(message) {
+  if (confirmationResolve) return Promise.resolve(false);
+  $('confirm-message').textContent = message;
+  $('confirm-dialog').showModal();
+  return new Promise(resolve => { confirmationResolve = resolve; });
+}
+function resolveConfirmation(value) {
+  const resolve = confirmationResolve; confirmationResolve = null;
+  $('confirm-dialog').close(); if(resolve) resolve(value);
+}
+$('confirm-yes').onclick = () => resolveConfirmation(true);
+$('confirm-no').onclick = () => resolveConfirmation(false);
+$('confirm-dialog').addEventListener('cancel', event => {event.preventDefault();resolveConfirmation(false);});
+$('confirm-dialog').addEventListener('close', () => {if(confirmationResolve) resolveConfirmation(false);});

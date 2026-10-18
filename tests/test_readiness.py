@@ -58,3 +58,34 @@ class ReadinessTests(unittest.TestCase):
         payload['version']='0.5.0'
         with patch.object(module, 'urlopen', return_value=io.BytesIO(json.dumps(payload).encode())):
             self.assertTrue(module.verify('http://nas:8765', '0.5.0')['ok'])
+
+    def test_restore_into_new_library_preserves_accounts_and_media_without_touching_source(self):
+        from xbm.accounts import AccountManager
+        from xbm.server import ingest_payload
+        from xbm.backup import restore_snapshot
+        from xbm.config import load
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);config=root/'config.toml'
+            config.write_text('[data]\nroot='+json.dumps(str(root/'original')))
+            manager=AccountManager(load(config));cfg,store=manager.get('x:fixture',create=True)
+            ingest_payload({'tweets':[{'tweet_id':'42','text':'synthetic','media':[{'type':'photo','url':'https://pbs.twimg.com/media/synthetic.jpg'}]}]},store)
+            file=cfg.media_dir/'42/42_1.jpg';file.parent.mkdir(parents=True);file.write_bytes(b'fixture')
+            store.mark_done(1,str(file),7)
+            create_snapshot(config,root/'backup')
+            result=restore_snapshot(root/'backup',root/'restored',root/'original/media')
+            self.assertEqual(result['restored_media'],1)
+            new=AccountManager(load(root/'restored/config.toml'))
+            newcfg,newstore=new.get('x:fixture')
+            self.assertEqual(newstore.count_tweets(),1)
+            self.assertEqual(newstore.get_media(1)['status'],'done')
+            self.assertEqual(Path(newstore.get_media(1)['local_path']).read_bytes(),b'fixture')
+            self.assertTrue(Path(newstore.get_media(1)['local_path']).is_relative_to(root/'restored'))
+            self.assertEqual(file.read_bytes(),b'fixture')
+            new.close()
+            missing=restore_snapshot(root/'backup',root/'without-media')
+            self.assertEqual(missing['media_pending'],1)
+            third=AccountManager(load(root/'without-media/config.toml'))
+            self.assertEqual(third.get('x:fixture')[1].get_media(1)['status'],'pending')
+            third.close()
+            with self.assertRaises(ValueError):restore_snapshot(root/'backup',root/'original')
+            manager.close()

@@ -94,6 +94,11 @@ class Store:
                               ("captured_at", "TEXT DEFAULT ''")]:
                 if name not in cols:
                     self._conn.execute(f"ALTER TABLE sync_runs ADD COLUMN {name} {ddl}")
+            if "purged_at" not in {r["name"] for r in self._conn.execute("PRAGMA table_info(tweets)")}:
+                self._conn.execute("ALTER TABLE tweets ADD COLUMN purged_at REAL DEFAULT 0")
+            self._conn.execute("CREATE TABLE IF NOT EXISTS purge_files(path TEXT PRIMARY KEY, error TEXT DEFAULT '')")
+            self._conn.execute("CREATE TABLE IF NOT EXISTS download_policy(id INTEGER PRIMARY KEY CHECK(id=1), mode TEXT NOT NULL DEFAULT 'all', budget INTEGER NOT NULL DEFAULT 0, paused INTEGER NOT NULL DEFAULT 0)")
+            self._conn.execute("INSERT OR IGNORE INTO download_policy(id) VALUES(1)")
             self._conn.commit()
 
     def _migrate_media(self) -> None:
@@ -126,6 +131,8 @@ class Store:
                      tweet["text"], tweet["created_at"], now, int(tweet["has_article"]), tweet["url"]),
                 )
                 new_count += cur.rowcount
+                if self._conn.execute('SELECT purged_at FROM tweets WHERE tweet_id=?', (tweet['tweet_id'],)).fetchone()[0]:
+                    continue
                 for kind, url in tweet["jobs"]:
                     cur = self._conn.execute(
                         """INSERT OR IGNORE INTO media_files
@@ -184,6 +191,9 @@ class Store:
         if not remote_url:
             return
         with self._lock:
+            purged = self._conn.execute('SELECT purged_at FROM tweets WHERE tweet_id=?', (tweet_id,)).fetchone()
+            if purged and purged[0]:
+                return
             self._conn.execute(
                 """INSERT OR IGNORE INTO media_files
                    (tweet_id, kind, remote_url, created_at)
@@ -201,12 +211,18 @@ class Store:
         """原子领取一个待下载任务（pending，或可重试的 failed）。"""
         now = time.time()
         with self._lock:
+            policy = self._conn.execute('SELECT * FROM download_policy WHERE id=1').fetchone()
+            used = self._conn.execute('SELECT COALESCE(SUM(bytes),0) FROM media_files').fetchone()[0]
+            if policy['paused'] or policy['mode']=='text' or policy['budget'] and used >= policy['budget']:
+                return None
+            kinds = {'all':('photo','video','gif','hls'), 'photos':('photo',), 'videos':('video','gif','hls')}[policy['mode']]
+            placeholders = ','.join('?' for _ in kinds)
             row = self._conn.execute(
-                """SELECT * FROM media_files
-                   WHERE status IN ('pending', 'failed') AND retries<? AND next_retry_at<=?
+                f"""SELECT * FROM media_files
+                   WHERE status IN ('pending', 'failed') AND retries<? AND next_retry_at<=? AND kind IN ({placeholders})
                    AND NOT EXISTS (SELECT 1 FROM tweets t WHERE t.tweet_id=media_files.tweet_id AND t.deleted_at>0)
                    ORDER BY created_at ASC LIMIT 1""",
-                (max_retries, now),
+                (max_retries, now, *kinds),
             ).fetchone()
             if not row:
                 return None
@@ -326,7 +342,7 @@ class Store:
                                (received, total, speed, time.time(), media_id))
 
     def list_bookmarks(self, query: str = "", kind: str = "", limit: int = 24, offset: int = 0, status: str = "", trash: bool = False) -> dict:
-        where, args = ["t.deleted_at>0" if trash else "t.deleted_at=0"], []
+        where, args = ["t.deleted_at>0 AND t.purged_at=0" if trash else "t.deleted_at=0 AND t.purged_at=0"], []
         if status == 'done':
             where.append("EXISTS (SELECT 1 FROM media_files m WHERE m.tweet_id=t.tweet_id) AND NOT EXISTS (SELECT 1 FROM media_files m WHERE m.tweet_id=t.tweet_id AND m.status!='done')")
         elif status == 'incomplete':
@@ -367,7 +383,7 @@ class Store:
             if not restore and self._conn.execute(
                     f"SELECT 1 FROM media_files WHERE tweet_id IN ({marks}) AND status='downloading'", ids).fetchone():
                 raise ValueError('选中书签仍有媒体正在下载，请下载结束后再删除')
-            cur = self._conn.execute(f"UPDATE tweets SET deleted_at=? WHERE tweet_id IN ({marks})",
+            cur = self._conn.execute(f"UPDATE tweets SET deleted_at=? WHERE tweet_id IN ({marks}) AND purged_at=0",
                                      [0 if restore else time.time(), *ids])
             return cur.rowcount
 
@@ -401,6 +417,19 @@ class Store:
         with self._lock:
             row = self._conn.execute("SELECT * FROM media_files WHERE id=?", (media_id,)).fetchone()
         return dict(row) if row else None
+
+    def download_policy(self):
+        with self._lock:
+            row = dict(self._conn.execute('SELECT mode,budget,paused FROM download_policy WHERE id=1').fetchone())
+            used = self._conn.execute('SELECT COALESCE(SUM(bytes),0) FROM media_files').fetchone()[0]
+        row['budget_reached'] = bool(row['budget'] and used >= row['budget'])
+        return row
+
+    def set_download_policy(self, mode, budget, paused):
+        if mode not in {'all','photos','videos','text'} or type(budget) is not int or not 0 <= budget <= 1024**5 or type(paused) is not bool:
+            raise ValueError('下载范围或媒体预算无效')
+        with self._lock, self._conn:
+            self._conn.execute('UPDATE download_policy SET mode=?,budget=?,paused=? WHERE id=1',(mode,budget,int(paused)))
 
     def close(self) -> None:
         with self._lock:

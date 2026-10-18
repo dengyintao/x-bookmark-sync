@@ -68,3 +68,87 @@ def verify_snapshot(destination: Path):
                 if db.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
                     raise ValueError('snapshot database is corrupt')
     return manifest
+
+
+def restore_snapshot(source: Path, destination: Path, media_source: Path | None = None):
+    """Restore into a NEW installation directory; never overwrite an active library."""
+    from dataclasses import asdict
+    import re
+    source, destination = Path(source), Path(destination).absolute()
+    manifest = verify_snapshot(source)
+    cfg = load(source/'config.toml')
+    if destination.exists():
+        raise ValueError('restore destination must not exist')
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix='.xbm-restore-', dir=destination.parent))
+    restored_files = missing_files = 0
+    try:
+        os.chmod(staging,0o700)
+        (staging/'data').mkdir()
+        for name in manifest['files']:
+            if name == 'config.toml': continue
+            if not re.fullmatch(r'databases/(?:\.xbm/(?:xbm|operations)\.db|accounts/[a-z0-9_]{1,15}/\.xbm/xbm\.db)',name):
+                raise ValueError('unexpected snapshot member')
+            relative = Path(name).relative_to('databases')
+            target = staging/'data'/relative
+            target.parent.mkdir(parents=True,exist_ok=True)
+            shutil.copyfile(source/name,target)
+            target.chmod(0o600)
+            with sqlite3.connect(target) as db:
+                tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                if 'media_files' not in tables:continue
+                for media_id,local,status,size in db.execute('SELECT id,local_path,status,bytes FROM media_files').fetchall():
+                    if not local:
+                        if status in {'done','downloading'}:
+                            db.execute("UPDATE media_files SET status='pending',bytes=0,total_bytes=0,retries=0,next_retry_at=0,speed=0,error='媒体尚未恢复，等待重新下载' WHERE id=?",(media_id,))
+                            missing_files += 1
+                        continue
+                    try:
+                        relative_media = Path(local).relative_to(cfg.media_dir)
+                        if '..' in relative_media.parts:raise ValueError('unsafe media path')
+                    except ValueError:
+                        if status=='done':raise ValueError('snapshot media paths do not match its configuration')
+                        continue
+                    final = destination/'data/media'/relative_media
+                    copied = False
+                    if media_source and status == 'done':
+                        root = Path(media_source).resolve()
+                        candidate = root/relative_media
+                        if not candidate.is_symlink() and candidate.resolve().is_relative_to(root) and candidate.is_file():
+                            if candidate.stat().st_size != size:raise ValueError('backup media size mismatch')
+                            new_file = staging/'data/media'/relative_media
+                            new_file.parent.mkdir(parents=True,exist_ok=True)
+                            shutil.copyfile(candidate,new_file)
+                            if new_file.stat().st_size != size:raise ValueError('restored media size mismatch')
+                            copied = True;restored_files += 1
+                    db.execute('UPDATE media_files SET local_path=? WHERE id=?',(str(final),media_id))
+                    if not copied and status in {'done','downloading'}:
+                        # Missing media must not be presented as successfully restored.
+                        db.execute("UPDATE media_files SET status='pending',bytes=0,total_bytes=0,retries=0,next_retry_at=0,speed=0,error='媒体尚未恢复，等待重新下载' WHERE id=?",(media_id,))
+                        missing_files += 1
+                if 'purge_files' in tables:db.execute('DELETE FROM purge_files')
+                if db.execute('PRAGMA quick_check').fetchone()[0]!='ok':raise ValueError('restored database integrity check failed')
+        # Preserve supported application settings but isolate all writable locations.
+        data = {
+            'data':{'root':str(destination/'data')},
+            'migration':{'backup_dir':str(destination/'migrations')},
+            'sync':{'page_size':cfg.page_size,'max_pages':cfg.max_pages,'request_delay':cfg.request_delay,'fail_alert_threshold':cfg.fail_alert_threshold},
+            'gallery_dl':{'extra_args':cfg.gallery_dl_extra_args},
+            'notify':asdict(cfg.notify),'proxy':asdict(cfg.proxy),
+            'download':{**asdict(cfg.download),'dir':str(destination/'data/media')},
+        }
+        def literal(value):
+            if isinstance(value,bool):return 'true' if value else 'false'
+            if isinstance(value,(int,float)):return repr(value)
+            if isinstance(value,list):return '['+', '.join(literal(item) for item in value)+']'
+            return json.dumps(str(value),ensure_ascii=False)
+        text=''.join('['+section+']\n'+''.join(key+' = '+literal(value)+'\n' for key,value in values.items())+'\n' for section,values in data.items())
+        (staging/'config.toml').write_text(text)
+        (staging/'config.toml').chmod(0o600)
+        destination_check = load(staging/'config.toml')
+        if destination_check.data_root != destination/'data':raise ValueError('restore configuration validation failed')
+        staging.rename(destination)
+        return {'restored_media':restored_files,'media_pending':missing_files,'config':str(destination/'config.toml')}
+    except Exception:
+        shutil.rmtree(staging)
+        raise

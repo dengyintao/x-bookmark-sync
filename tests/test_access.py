@@ -48,7 +48,7 @@ class AccessHTTP(unittest.TestCase):
 
     def test_private_routes_require_auth_including_media_and_migrations(self):
         for path in ['/api/accounts','/api/status','/api/bookmarks','/api/media/1',
-                     '/api/diagnostics','/api/migrations','/api/browser-account','/api/client/status']:
+                     '/api/storage','/api/diagnostics','/api/migrations','/api/browser-account','/api/client/status']:
             self.denied(path, 401)
         self.denied('/api/ingest', 401, body={'tweets':[]})
         self.denied('/api/bookmarks/delete',401,body={'ids':['1']})
@@ -85,9 +85,11 @@ class AccessHTTP(unittest.TestCase):
         self.assertEqual(status['tweets'],1)
         self.assertNotIn('media_dir',status)
         self.call('/api/browser-account',{'account':'x:fixture','observed_at':1},token)
-        for path in ['/api/accounts','/api/bookmarks','/api/status','/api/access/clients','/api/media/1']:
+        for path in ['/api/accounts','/api/bookmarks','/api/status','/api/access/clients','/api/media/1','/api/storage']:
             self.denied(path,403,token=token)
         self.denied('/api/bookmarks/delete',403,body={'ids':['123']},token=token,headers={'X-XBM-Action':'bookmarks'})
+        self.denied('/api/storage/policy',403,body={'mode':'all','budget':0,'paused':False},token=token,headers={'X-XBM-Action':'storage'})
+        self.denied('/api/bookmarks/purge',403,body={'ids':['123']},token=token,headers={'X-XBM-Action':'bookmarks'})
         self.denied('/api/access/pair-code',403,body={},token=token,headers={'X-XBM-Action':'access'})
         fresh = Access(self.cfg.state_dir)
         self.assertEqual(fresh.authenticate(token)['role'],'extension')
@@ -114,6 +116,21 @@ class AccessHTTP(unittest.TestCase):
         self.denied('/api/accounts',401,token=self.key)
         self.assertEqual(self.access.key_path.stat().st_mode & 0o777,0o600)
         self.assertEqual(self.access.path.stat().st_mode & 0o777,0o600)
+
+    def test_dashboard_delete_restore_and_storage_policy(self):
+        self.call('/api/ingest',{'tweets':[{'tweet_id':'555','text':'synthetic'}]},self.key)
+        headers={'X-XBM-Action':'bookmarks','Origin':'https://nas.example','Sec-Fetch-Site':'same-origin'}
+        self.call('/api/bookmarks/delete',{'ids':['555']},self.key,headers=headers)
+        self.assertEqual(self.call('/api/bookmarks?trash=1',token=self.key)[0]['total'],1)
+        self.call('/api/bookmarks/restore',{'ids':['555']},self.key,headers=headers)
+        self.assertEqual(self.call('/api/bookmarks',token=self.key)[0]['total'],1)
+        self.call('/api/bookmarks/delete',{'ids':['555']},self.key,headers=headers)
+        self.call('/api/bookmarks/purge',{'ids':['555']},self.key,headers=headers)
+        self.assertEqual(self.call('/api/bookmarks?trash=1',token=self.key)[0]['total'],0)
+        self.call('/api/storage/policy',{'mode':'photos','budget':1000,'paused':True},self.key,
+                  headers={'X-XBM-Action':'storage','Origin':self.base})
+        policy=self.call('/api/storage',token=self.key)[0]['policy']
+        self.assertEqual(policy['mode'],'photos');self.assertTrue(policy['paused'])
 
     def test_rate_limit_and_empty_malformed_login(self):
         for _ in range(10):

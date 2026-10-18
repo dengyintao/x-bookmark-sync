@@ -217,7 +217,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if web.get(self):
             return
-        if parts.path == '/api/client/status':
+        if parts.path == '/api/storage':
+            self._json(200, {'ok': True, **self.storage.summary(self.account), 'policy':self.store.download_policy()})
+        elif parts.path == '/api/client/status':
             self._json(200, {'ok': True, 'service': 'xbm', 'version': __version__,
                              'protocol_version': 1, 'account': self.account,
                              'tweets': self.store.count_tweets(), 'media': self.store.media_stats()})
@@ -309,9 +311,12 @@ def make_server(cfg: Config, port: int, *, require_auth: bool = True) -> Threadi
     accounts = AccountManager(cfg)
     from .migration import Migrations
     migrations = Migrations(accounts)
+    from .storage import Storage
+    storage = Storage(accounts)
     store = accounts.get('')[1]
-    handler = type("XbmHandler", (Handler,), {"config": cfg, "store": store, "accounts": accounts, "migrations": migrations, "access": access})
+    handler = type("XbmHandler", (Handler,), {"config": cfg, "store": store, "accounts": accounts, "migrations": migrations, "access": access, "storage": storage})
     server = ThreadingHTTPServer(("0.0.0.0", port), handler)
+    server._xbm_storage = storage
     server._xbm_access = access
     server._xbm_migrations = migrations
     server._xbm_accounts = accounts
@@ -323,12 +328,14 @@ def run(cfg: Config, port: int = 8765) -> None:
     server = make_server(cfg, port)
     accounts = server._xbm_accounts
     accounts.start()
+    server._xbm_storage.start()
     print(f"xbm serve on :{port}  (data: {cfg.data_root}, media: {cfg.media_dir})")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        server._xbm_storage.close()
+        server.server_close()  # Finish active HTTP handlers before closing their stores.
         server._xbm_migrations.close()
         accounts.close()
-        server.server_close()

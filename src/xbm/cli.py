@@ -178,6 +178,24 @@ def cmd_migrate(args) -> int:
         return 1
 
 
+def cmd_backup(args) -> int:
+    from .backup import create_snapshot, verify_snapshot
+    if not args.config:
+        raise ValueError('请显式指定 --config，避免备份错误的数据目录')
+    create_snapshot(Path(args.config),Path(args.out))
+    verify_snapshot(Path(args.out))
+    print('数据库及配置快照校验通过。媒体不包含在此快照中，请另行备份。')
+    return 0
+
+
+def cmd_restore(args) -> int:
+    from .backup import restore_snapshot
+    result = restore_snapshot(Path(args.source),Path(args.out),Path(args.media_source) if args.media_source else None)
+    print(json.dumps(result,ensure_ascii=False))
+    print('已恢复到新目录。原服务未更改；用新配置启动前请检查权限和存储，并重新设置访问。')
+    return 0
+
+
 def cmd_access_key(args) -> int:
     from .access import Access
     cfg = config_mod.load(args.config)
@@ -194,6 +212,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--config", help="config.toml 路径")
     sub = p.add_subparsers(dest="cmd", required=True)
 
+    pb = sub.add_parser('backup', help='创建数据库与配置快照，不包含媒体')
+    pb.add_argument('--out', required=True, help='必须不存在的新备份目录')
+    pb.set_defaults(func=cmd_backup)
+    pr = sub.add_parser('restore', help='将快照恢复至新目录，不覆盖运行中的数据')
+    pr.add_argument('--source', required=True, help='备份目录')
+    pr.add_argument('--out', required=True, help='必须不存在的新恢复目录')
+    pr.add_argument('--media-source', help='另外备份的媒体根目录，可选')
+    pr.set_defaults(func=cmd_restore)
     pk = sub.add_parser('access-key', help='本机读取管理密钥；不要分享输出')
     pk.add_argument('--reset', action='store_true', help='更新管理密钥并撤销全部登录/配对')
     pk.set_defaults(func=cmd_access_key)

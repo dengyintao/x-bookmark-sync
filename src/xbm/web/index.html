@@ -42,6 +42,7 @@
           <p id="subtitle">值得保存的内容，随时回看。</p>
         </div>
         <button id="access-open" class="outline">连接与配对</button>
+        <button id="storage-open" class="outline">存储管理</button>
         <button id="diagnostics-open" class="outline">连接诊断</button>
         <button id="ownership-open" class="outline">旧数据归属</button
         ><button id="refresh" class="outline">↻ 刷新</button>
@@ -86,7 +87,7 @@
           <select id="layout" aria-label="展示形式"><option value="cards">卡片</option><option value="list">紧凑列表</option><option value="preview">媒体预览</option></select>
           <select id="trash" aria-label="书签范围"><option value="0">书签库</option><option value="1">回收站</option></select>
           <button id="select-page" class="outline">选择本页</button><button id="delete-selected" class="outline" disabled>删除所选</button>
-          <span id="selection-count"></span>
+          <button id="purge-selected" class="outline" hidden disabled>彻底删除所选</button><span id="selection-count"></span>
         </div>
         <p id="view-note" class="view-note"></p>
         <div id="content" aria-live="polite"></div>
@@ -164,6 +165,22 @@
       <button id="access-refresh" class="outline">刷新连接列表</button>
       <button id="access-close" class="outline">关闭</button>
       <button id="logout" class="outline">退出管理页面</button>
+    </dialog>
+    <dialog id="storage-dialog"><h2>存储管理</h2>
+      <div id="storage-result" role="status"></div>
+      <form id="storage-policy-form">
+        <label for="download-mode">此账户下载范围</label><select id="download-mode"><option value="all">全部媒体</option><option value="photos">仅图片</option><option value="videos">仅视频和动图</option><option value="text">仅保存书签，不下载媒体</option></select>
+        <label for="download-budget">媒体预算（GiB，0 表示不限）</label><input id="download-budget" type="number" min="0" max="1048576" step="0.1" value="0">
+        <label><input id="download-paused" type="checkbox">暂停领取新下载任务</label>
+        <button type="submit">保存下载设置</button>
+      </form>
+      <p>达到预算后暂停新任务；正在进行的下载会完成，因此可能超出预算。切换范围不删除已有文件，未领取任务会保留，恢复设置后可继续下载。</p>
+      <p>普通删除移入回收站并保留文件。进入回收站，选择书签后“彻底删除所选”会清理该账户的本地文件，无法恢复；不会删除 X 上的收藏。其他书签仍引用的文件会保留。</p>
+      <p>文件清理失败会保留待清理记录并在后台重试。媒体字节数来自下载记录，硬链接、临时文件和文件系统回收策略会影响实际释放空间，请以卷剩余空间为准。</p>
+      <button id="storage-close" class="outline">关闭</button>
+    </dialog>
+    <dialog id="confirm-dialog" aria-labelledby="confirm-title"><h2 id="confirm-title">确认操作</h2>
+      <p id="confirm-message"></p><button id="confirm-no" class="outline" autofocus>取消</button><button id="confirm-yes">确认</button>
     </dialog>
   </body>
 </html>
