@@ -26,7 +26,7 @@ with tempfile.TemporaryDirectory(prefix='xbm-fpk-smoke-') as temporary:
         hook('main', 'start')
         hook('main', 'status')
         assert b'<html' in get('/').lower()
-        assert json.loads(get('/api/status'))['version'] == '0.5.1'
+        assert json.loads(get('/api/status'))['version'] == '0.5.2'
         hook('main', 'start')  # idempotent
         hook('upgrade_init')
         assert hook('main', 'status', check=False).returncode == 3

@@ -110,6 +110,11 @@ class Handler(BaseHTTPRequestHandler):
         return False
 
     def do_GET(self):
+        self._dashboard_verified = False
+        if urlsplit(self.path).path == '/api/dashboard-token':
+            from .dashboard import serve_token
+            serve_token(self)
+            return
         from . import web
         parts = urlsplit(self.path)
         if web.management(self, 'GET'):
@@ -138,6 +143,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(404, {"ok": False, "error": "not found"})
 
     def do_POST(self):
+        self._dashboard_verified = False
         from . import web
         if web.management(self, 'POST'):
             return
@@ -199,11 +205,13 @@ class Handler(BaseHTTPRequestHandler):
 
 def make_server(cfg: Config, port: int) -> ThreadingHTTPServer:
     cfg.state_dir.mkdir(parents=True, exist_ok=True)
+    from .dashboard import DashboardTokens
+    dashboard = DashboardTokens()
     accounts = AccountManager(cfg)
     from .migration import Migrations
     migrations = Migrations(accounts)
     store = accounts.get('')[1]
-    handler = type("XbmHandler", (Handler,), {"config": cfg, "store": store, "accounts": accounts, "migrations": migrations})
+    handler = type("XbmHandler", (Handler,), {"config": cfg, "store": store, "accounts": accounts, "migrations": migrations, "dashboard":dashboard})
     server = ThreadingHTTPServer(("0.0.0.0", port), handler)
     server._xbm_migrations = migrations
     server._xbm_accounts = accounts

@@ -104,7 +104,14 @@ function bytes(n) {
   }
   return `${n.toFixed(i ? 1 : 0)} ${units[i]}`;
 }
+async function dashboardHeaders(headers = {}) {
+  const response = await fetch('/api/dashboard-token', {cache:'no-store',credentials:'same-origin',signal:AbortSignal.timeout(10000)});
+  const data = await response.json();
+  if (!response.ok || !data.ok || !data.token) throw new Error('请刷新管理页面后重试');
+  return {...headers,'X-XBM-Dashboard':data.token};
+}
 async function api(path, options = {}) {
+  if ((options.method || 'GET').toUpperCase() === 'POST') options = {...options,headers:await dashboardHeaders(options.headers)};
   const r = await fetch(path === "/api/accounts" ? path : accountUrl(path), {
     ...options,
     signal: AbortSignal.timeout(12000),
