@@ -372,3 +372,17 @@ test('existing legacy origin stays compatible but never bypasses a secured NAS',
  h.context.fetch=async()=>({status:200});
  await assert.rejects(vm.runInContext("nasRequest('http://nas','/api/ingest',{method:'POST',body:'{}'})",h.context),/重新配对/);
 });
+
+test('expired paired credential never downgrades to legacy mode',async()=>{
+ const h=setup({});h.stored.xbm_connections={'http://nas':{token:'expired',expires:1}};
+ h.stored.xbm_legacy_origins={'http://nas':true};let calls=0;
+ h.context.fetch=async()=>{calls++;return {status:404}};
+ await assert.rejects(vm.runInContext("nasRequest('http://nas','/api/ingest',{method:'POST'})",h.context),/过期/);
+ assert.equal(calls,0);
+});
+test('extension update preserves only the already configured legacy origin',async()=>{
+ const h=setup({});h.context.chrome.storage.sync.get=async defaults=>({...defaults,serverUrl:'http://nas'});
+ await vm.runInContext("initialize({reason:'update',previousVersion:'0.3.0'})",h.context);
+ assert.equal(h.stored.xbm_legacy_origins['http://nas'],true);
+ assert.equal(Object.keys(h.stored.xbm_legacy_origins).length,1);
+});
