@@ -17,7 +17,7 @@ class DashboardTest(unittest.TestCase):
     def setUp(self):
         self.tmp = TemporaryDirectory()
         self.cfg = Config(data_root=Path(self.tmp.name))
-        self.server = make_server(self.cfg, 0)
+        self.server = make_server(self.cfg, 0, require_auth=False)
         self.store = self.server._xbm_store
         self.base = f'http://127.0.0.1:{self.server.server_port}'
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)

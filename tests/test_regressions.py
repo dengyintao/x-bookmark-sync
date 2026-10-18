@@ -71,7 +71,7 @@ class HTTPValidation(unittest.TestCase):
         from xbm.config import Config
         from xbm.server import make_server
         with tempfile.TemporaryDirectory() as tmp:
-            server = make_server(Config(data_root=Path(tmp)), 0)
+            server = make_server(Config(data_root=Path(tmp)), 0, require_auth=False)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             try:

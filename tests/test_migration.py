@@ -176,7 +176,7 @@ class MigrationTest(unittest.TestCase):
 class MigrationHTTP(unittest.TestCase):
     def test_api_requires_action_header_and_preserves_journal(self):
         with TemporaryDirectory() as tmp:
-            server=make_server(Config(data_root=Path(tmp),migration_backup_dir=str(Path(tmp)/"backups")),0)
+            server=make_server(Config(data_root=Path(tmp),migration_backup_dir=str(Path(tmp)/"backups")),0,require_auth=False)
             threading.Thread(target=server.serve_forever,daemon=True).start()
             base=f'http://127.0.0.1:{server.server_port}'
             def call(path,data=None,headers=None):

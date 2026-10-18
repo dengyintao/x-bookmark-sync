@@ -6,7 +6,7 @@ const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '../extension/background.js'), 'utf8');
 function setup(response, collect = {ok:true,tweets:[{tweet_id:'99'}]}) {
   const removed=[], updated=[]; let created=0;
-  const stored = {};
+  const stored = {xbm_connections:{'http://nas':{token:'synthetic-token',expires:4102444800},'http://192.168.1.10:8765':{token:'synthetic-token',expires:4102444800}}};
   const context = vm.createContext({setInterval(){}, URL, AbortSignal, console, setTimeout, clearTimeout,
     fetch: async()=>({ok:true,json:async()=>({ok:true,account:'x:fixture'})}),
     chrome: { storage: {sync: {get:async d=>d}, local: {get:async d=>({...d,...structuredClone(stored)}),set:async d=>Object.assign(stored,structuredClone(d))}},
@@ -15,6 +15,7 @@ function setup(response, collect = {ok:true,tweets:[{tweet_id:'99'}]}) {
       alarms:{onAlarm:{addListener(){}},create(){}},
       runtime:{sendMessage:async()=>({ok:true}),onMessage:{addListener(){}},onInstalled:{addListener(){}},onStartup:{addListener(){}}}}
   });
+  context.importScripts=name=>vm.runInContext(fs.readFileSync(path.join(__dirname,'../extension',name),'utf8'),context);
   vm.runInContext(source,context);
   return {context,removed,updated,stored,get created(){return created}};
 }
@@ -48,8 +49,8 @@ test('content script answers readiness ping on login page',()=>{
 test('queue flush cannot erase captures arriving during upload',async()=>{
   const h=setup({ok:true,ready:true,url:'https://x.com/i/bookmarks'});
   let stored=[{tweet_id:'1'}], release;
-  h.context.chrome.storage.local.get=async()=>({xbm_pending_queue:structuredClone(stored)});
-  h.context.chrome.storage.local.set=async d=>{stored=structuredClone(d.xbm_pending_queue)};
+  h.context.chrome.storage.local.get=async()=>({...h.stored,xbm_pending_queue:structuredClone(stored)});
+  h.context.chrome.storage.local.set=async d=>{if(d.xbm_pending_queue)stored=structuredClone(d.xbm_pending_queue)};
   h.context.fetch=async()=>{await new Promise(r=>{release=r});return {ok:true,json:async()=>({ok:true})}};
   const flushing=vm.runInContext("flushQueue('http://nas')",h.context);
   await new Promise(setImmediate);
@@ -338,4 +339,27 @@ test('startup outage preserves queue and communicates incomplete history',async(
  assert.equal(h.stored.xbm_pending_queue.length,1);
  assert.equal(h.stored.xbm_sync_status.state,'pending_delivery');
  assert.equal(h.stored.xbm_sync_status.reason,'interrupted');
+});
+
+test('unpaired NAS cannot receive pending bookmarks',async()=>{
+ const h=setup({});h.stored.xbm_connections={};h.stored.xbm_pending_queue=[{tweet_id:'1'}];let calls=0;
+ h.context.fetch=async()=>{calls++;throw Error('must not connect')};
+ await assert.rejects(vm.runInContext("flushQueue('http://nas')",h.context),/配对/);
+ assert.equal(calls,0);assert.equal(h.stored.xbm_pending_queue.length,1);
+});
+test('pairing credentials are bound to exact origin and do not follow redirects',async()=>{
+ const h=setup({});let request;
+ h.context.fetch=async(url,options)=>{request={url,options};return {ok:true,status:200,json:async()=>({ok:true})}};
+ await vm.runInContext("nasRequest('http://nas','/api/client/status')",h.context);
+ assert.equal(request.options.headers.Authorization,'Bearer synthetic-token');
+ assert.equal(request.options.credentials,'omit');assert.equal(request.options.redirect,'error');
+ await assert.rejects(vm.runInContext("nasRequest('http://other-nas','/api/client/status')",h.context),/配对/);
+ await assert.rejects(vm.runInContext("nasRequest('http://nas:9999','/api/client/status')",h.context),/配对/);
+ await assert.rejects(vm.runInContext("nasRequest('http://nas/path','/api/client/status')",h.context),/地址/);
+});
+test('revoked credential keeps the outbox and asks for pairing',async()=>{
+ const h=setup({});h.stored.xbm_pending_queue=[{tweet_id:'1'}];
+ h.context.fetch=async()=>({ok:false,status:401});
+ await assert.rejects(vm.runInContext("flushQueue('http://nas')",h.context),/配对已失效/);
+ assert.equal(h.stored.xbm_pending_queue.length,1);
 });

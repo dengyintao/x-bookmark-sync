@@ -4,6 +4,7 @@
  *       3) 仅在 NAS 确认后删除队列，断线时独立补传。
  */
 'use strict';
+importScripts('connection.js');
 
 const ALARM_NAME = 'xbm-sync';
 const QUEUE_KEY = 'xbm_pending_queue';
@@ -87,7 +88,7 @@ async function getConfig() {
 function validAccount(value) { return typeof value === 'string' && /^x:[a-z0-9_]{1,15}$/.test(value); }
 
 async function pushToServer(serverUrl, tweets, account = '') {
-  const res = await fetch(serverUrl + '/api/ingest' + (account ? '?account=' + encodeURIComponent(account) : ''), {
+  const res = await nasRequest(serverUrl, '/api/ingest' + (account ? '?account=' + encodeURIComponent(account) : ''), {
     signal: AbortSignal.timeout(20000),
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -209,7 +210,7 @@ async function reportBrowserAccount(account, observedAt = Date.now()) {
   if (!validAccount(account)) throw new Error('无法识别 X 账户');
   await chrome.storage.local.set({ xbm_current_account: account, xbm_account_observed_at: observedAt });
   const cfg = await getConfig();
-  const response = await fetch(cfg.serverUrl + '/api/browser-account', {
+  const response = await nasRequest(cfg.serverUrl, '/api/browser-account', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     signal: AbortSignal.timeout(10000), body: JSON.stringify({ account, observed_at: observedAt / 1000 }),
   });
@@ -267,6 +268,10 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
       if (tab) await chrome.tabs.sendMessage(tab.id,{type:'stop-collect'});
       sendResponse({ok:true});
     })().catch(e => sendResponse({ok:false,error:e.message}));
+    return true;
+  }
+  if (msg && msg.type === 'retry-delivery' && !sender.tab) {
+    getConfig().then(cfg => flushQueue(cfg.serverUrl)).then(() => sendResponse({ok:true}), e => sendResponse({ok:false,error:e.message}));
     return true;
   }
   if (msg && msg.type === 'manual-sync') {

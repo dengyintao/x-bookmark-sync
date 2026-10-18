@@ -59,6 +59,10 @@ def verify_fpk(path, manifest):
             for icon in ('ui/images/icon_64.png','ui/images/icon_256.png'):
                 if payload.getmember(icon).size <= 0:
                     raise ValueError('FPK desktop icon is empty')
+        for name in ('wizard/install', 'wizard/upgrade'):
+            wizard = json.loads(package.extractfile(name).read())
+            if not wizard or not any(item.get('field') == 'wizard_admin_password' for step in wizard for item in step['items']):
+                raise ValueError('FPK management password wizard missing')
         for name in ('ICON.PNG', 'ICON_256.PNG'):
             if package.getmember(name).size <= 0:
                 raise ValueError('FPK icon is empty')

@@ -7,3 +7,6 @@ if [ ! -f "$TRIM_PKGETC/config.toml" ]; then
     "$TRIM_APPDEST/server/xbm" --write-fnos-config "$TRIM_PKGETC/config.toml" "$TRIM_PKGVAR"
     chmod 600 "$TRIM_PKGETC/config.toml"
 fi
+
+# The wizard password is read from the environment, never a command argument/log.
+"$TRIM_APPDEST/server/xbm" --configure-access "$TRIM_PKGETC/config.toml"

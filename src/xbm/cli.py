@@ -146,9 +146,12 @@ def cmd_migrate(args) -> int:
     import urllib.request
     from urllib.parse import urlencode
     try:
+        headers = {'Content-Type':'application/json', 'X-XBM-Action':'migrate'}
+        if args.key_file:
+            headers['Authorization'] = 'Bearer ' + Path(args.key_file).read_text().strip()
         if args.rollback:
             request = urllib.request.Request(args.server.rstrip('/') + '/api/migrations/' + args.rollback + '/rollback',
-                data=b'{}', headers={'Content-Type':'application/json','X-XBM-Action':'migrate'})
+                data=b'{}', headers=headers)
             with urllib.request.urlopen(request,timeout=30) as response:
                 print(json.dumps(json.load(response),ensure_ascii=False))
             return 0
@@ -156,7 +159,7 @@ def cmd_migrate(args) -> int:
             raise ValueError('请指定 --account 或 --rollback')
         account = 'x:' + args.account.lstrip('@').removeprefix('x:').lower()
         base = args.server.rstrip('/')
-        with urllib.request.urlopen(base + '/api/migrations/preview?' + urlencode({'target': account}), timeout=30) as response:
+        with urllib.request.urlopen(urllib.request.Request(base + '/api/migrations/preview?' + urlencode({'target': account}), headers=headers), timeout=30) as response:
             plan = json.load(response)
         print(json.dumps(plan, ensure_ascii=False, indent=2))
         if not args.apply:
@@ -166,7 +169,7 @@ def cmd_migrate(args) -> int:
             return 1
         request = urllib.request.Request(base + '/api/migrations',
             data=json.dumps({'account': account, 'token': plan['token']}).encode(),
-            headers={'Content-Type': 'application/json', 'X-XBM-Action': 'migrate'})
+            headers=headers)
         with urllib.request.urlopen(request, timeout=30) as response:
             print(json.dumps(json.load(response), ensure_ascii=False))
         return 0
@@ -175,10 +178,25 @@ def cmd_migrate(args) -> int:
         return 1
 
 
+def cmd_access_key(args) -> int:
+    from .access import Access
+    cfg = config_mod.load(args.config)
+    access = Access(cfg.state_dir)
+    if args.reset:
+        access.reset()
+        print('已撤销全部连接并更新管理密钥。请用新密钥登录并重新配对扩展。')
+    print(access.key_path.read_text().strip())
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="xbm", description="同步 X 书签到 NAS 本地")
     p.add_argument("--config", help="config.toml 路径")
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    pk = sub.add_parser('access-key', help='本机读取管理密钥；不要分享输出')
+    pk.add_argument('--reset', action='store_true', help='更新管理密钥并撤销全部登录/配对')
+    pk.set_defaults(func=cmd_access_key)
 
     pa = sub.add_parser("auth", help="登录与自检")
     pa_sub = pa.add_subparsers(dest="auth_cmd", required=True)
@@ -207,6 +225,7 @@ def build_parser() -> argparse.ArgumentParser:
     pm.add_argument('--server', default='http://127.0.0.1:8765')
     pm.add_argument('--rollback', help='撤销指定任务；有新数据时拒绝覆盖')
     pm.add_argument('--apply', action='store_true')
+    pm.add_argument('--key-file', help='此目标 NAS 的管理密钥文件；不会自动发送本机密钥')
     pm.set_defaults(func=cmd_migrate)
     return p
 

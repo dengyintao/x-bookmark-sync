@@ -10,7 +10,7 @@ def verify(base, expected):
     parsed = urlsplit(base)
     if parsed.scheme not in {'http', 'https'} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in {'', '/'}:
         raise ValueError('provide an HTTP(S) origin without credentials')
-    with urlopen(base.rstrip('/')+'/api/status', timeout=10) as response:
+    with urlopen(base.rstrip('/')+'/api/health', timeout=10) as response:
         status = json.load(response)
     if status.get('ok') is not True or status.get('service') != 'xbm':
         raise ValueError('unexpected service')

@@ -1,6 +1,6 @@
 /* options.js */
 async function allowServer(serverUrl) {
-  const url = new URL(serverUrl);
+  const url = new URL(nasOrigin(serverUrl));
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
     throw new Error('请填写完整的 HTTP/HTTPS 服务地址，例如 http://192.168.192.2:8765');
   }
@@ -26,9 +26,14 @@ document.getElementById('test').addEventListener('click', async function () {
   const serverUrl = document.getElementById('serverUrl').value.trim().replace(/\/+$/, '');
   try {
     await allowServer(serverUrl);
-    const r = await fetch(serverUrl + '/api/status', { signal: AbortSignal.timeout(10000) });
+    const health = await nasRequest(serverUrl, '/api/health', {}, false);
+    const info = await health.json();
+    if (!health.ok || info.service !== 'xbm' || info.protocol_version !== 1 || !info.pairing_required)
+      throw new Error('服务版本不支持安全配对，请先升级 NAS 服务');
+    const r = await nasRequest(serverUrl, '/api/client/status');
     const j = await r.json();
-    setMsg(r.ok ? '连接成功：' + JSON.stringify(j) : 'HTTP ' + r.status);
+    if (!r.ok || !j.ok) throw new Error('HTTP ' + r.status);
+    setMsg('连接正常 · NAS ' + info.version + ' · 扩展 ' + chrome.runtime.getManifest().version + '。下一步：打开 X 书签页，在扩展弹窗开始自动采集。');
   } catch (e) {
     setMsg('连接失败：' + e.message);
   }
@@ -56,3 +61,30 @@ async function loadHistory() {
 }
 document.getElementById('refreshHistory').addEventListener('click', loadHistory);
 loadHistory();
+
+document.getElementById('pair').addEventListener('click', async () => {
+  const button = document.getElementById('pair');
+  button.disabled = true;
+  try {
+    const origin = nasOrigin(document.getElementById('serverUrl').value.trim());
+    await allowServer(origin);
+    const health = await nasRequest(origin, '/api/health', {}, false);
+    const info = await health.json();
+    if (!health.ok || info.service !== 'xbm' || info.protocol_version !== 1 || !info.pairing_required)
+      throw new Error('请先升级 NAS 服务到支持安全配对的版本');
+    const response = await nasRequest(origin, '/api/access/pair', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({
+        code:document.getElementById('pairCode').value.trim(), name:document.getElementById('clientName').value.trim()})}, false);
+    const result = await response.json();
+    if (!response.ok || !result.ok || typeof result.token !== 'string' || !result.token || !Number.isFinite(result.expires))
+      throw new Error(result.error || '配对失败，请重新生成配对码');
+    const data = await chrome.storage.local.get({xbm_connections:{}});
+    data.xbm_connections[origin] = {token:result.token, id:result.id, expires:result.expires};
+    await chrome.storage.local.set({xbm_connections:data.xbm_connections});
+    await chrome.storage.sync.set({serverUrl:origin});
+    document.getElementById('pairCode').value = '';
+    chrome.runtime.sendMessage({type:'retry-delivery'}).catch(console.warn);
+    setMsg('配对成功。现在打开 X 书签页，在扩展弹窗点击“自动采集历史书签”。已有待传内容会自动补传。');
+  } catch (error) { setMsg(error.message); }
+  finally { button.disabled = false; }
+});

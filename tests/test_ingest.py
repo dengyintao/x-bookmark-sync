@@ -26,7 +26,7 @@ class IngestTest(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = TemporaryDirectory()
         cfg = Config(data_root=Path(cls.tmp.name))
-        cls.srv = server_mod.make_server(cfg, 0)  # 0 = 随机空闲端口
+        cls.srv = server_mod.make_server(cfg, 0, require_auth=False)  # 0 = 随机空闲端口
         cls.port = cls.srv.server_address[1]
         cls.thread = threading.Thread(target=cls.srv.serve_forever, daemon=True)
         cls.thread.start()

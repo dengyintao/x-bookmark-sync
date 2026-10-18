@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="/style.css" />
     <script src="/app.js" defer></script>
   </head>
-  <body>
+  <body class="locked">
     <aside>
       <a class="brand" href="#bookmarks"
         ><img src="/icon.svg" alt="" /><span
@@ -41,6 +41,7 @@
           <h1 id="title">全部书签</h1>
           <p id="subtitle">值得保存的内容，随时回看。</p>
         </div>
+        <button id="access-open" class="outline">连接与配对</button>
         <button id="diagnostics-open" class="outline">连接诊断</button>
         <button id="ownership-open" class="outline">旧数据归属</button
         ><button id="refresh" class="outline">↻ 刷新</button>
@@ -136,6 +137,33 @@
       <pre id="diagnostics-result"></pre>
       <button id="diagnostics-export" disabled>导出诊断</button>
       <button id="diagnostics-close" class="outline">关闭</button>
+    </dialog>
+    <dialog id="login-dialog" aria-labelledby="login-title">
+      <h2 id="login-title">连接你的书签库</h2>
+      <p>请输入安装时设置的管理密码。登录凭据不会保存在浏览器本地存储中。</p>
+      <form id="login-form">
+        <label for="admin-key">管理密码或管理密钥</label>
+        <input id="admin-key" type="password" autocomplete="off" required maxlength="256">
+        <button id="login-submit" type="submit">登录</button>
+      </form>
+      <p id="login-message" role="status"></p>
+      <details><summary>第一次使用 / 忘记密码</summary>
+        <p>通过飞牛安装向导设置管理密码即可登录。未设置密码或需要恢复访问时，数据目录的 .xbm/admin-key.txt 保存着恢复用的管理密钥。通过 NAS 文件管理器（需有权限）或终端读取；不要将密钥发给他人，也不要粘贴到扩展中。</p>
+        <p>终端可执行：<code>xbm --config config.toml access-key</code>。独立安装包将 xbm 替换为应用目录下的 target/server/xbm，并指定实际配置文件。</p>
+        <p>无法取得密钥时，请联系 NAS 管理员。网页不提供匿名重置入口。</p>
+      </details>
+    </dialog>
+    <dialog id="access-dialog" aria-labelledby="access-title">
+      <h2 id="access-title">连接与配对</h2>
+      <ol><li>安装浏览器扩展，并打开扩展设置。</li><li>填写下方 NAS 地址及一次性配对码。</li><li>配对成功后登录 X，打开书签页，在扩展弹窗启动自动采集。</li></ol>
+      <p>NAS 地址：<code id="pair-server"></code></p>
+      <button id="pair-create">生成配对码</button>
+      <p id="pair-result" role="status"></p>
+      <p class="view-note">配对码 5 分钟有效且只能使用一次，新码会使旧码失效。扩展只能提交书签和读取同步状态，不能删除或迁移数据。请在可信局域网或 HTTPS 连接上配对。</p>
+      <h3>已配对浏览器</h3><div id="paired-clients"></div>
+      <button id="access-refresh" class="outline">刷新连接列表</button>
+      <button id="access-close" class="outline">关闭</button>
+      <button id="logout" class="outline">退出管理页面</button>
     </dialog>
   </body>
 </html>

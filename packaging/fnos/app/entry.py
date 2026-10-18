@@ -1,6 +1,16 @@
 """Frozen application and gallery-dl entry points."""
 import sys
 if __name__ == '__main__':
+    if len(sys.argv) == 3 and sys.argv[1] == '--configure-access':
+        import os
+        from pathlib import Path
+        from xbm.config import load
+        from xbm.access import Access
+        access = Access(load(Path(sys.argv[2])).state_dir)
+        password = os.environ.get('wizard_admin_password', '')
+        if password:
+            access.configure_password(password)
+        sys.exit(0)
     if len(sys.argv) == 4 and sys.argv[1] == '--backup-metadata':
         from pathlib import Path
         from xbm.backup import create_snapshot, verify_snapshot
@@ -15,7 +25,13 @@ if __name__ == '__main__':
         from xbm import __version__
         for attempt in range(15):
             try:
-                with urllib.request.urlopen(sys.argv[2].rstrip('/') + '/api/status', timeout=2) as response:
+                from pathlib import Path
+                from xbm.config import load
+                cfg = load(Path(sys.argv[3]))
+                key = (cfg.state_dir/'admin-key.txt').read_text().strip()
+                request = urllib.request.Request(sys.argv[2].rstrip('/') + '/api/status',
+                    headers={'Authorization': 'Bearer '+key})
+                with urllib.request.urlopen(request, timeout=2) as response:
                     status = json.load(response)
                 if status.get('service') != 'xbm' or status.get('version') != __version__:
                     raise ValueError('Running service version differs from installed program')

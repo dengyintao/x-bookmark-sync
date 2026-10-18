@@ -1,4 +1,5 @@
 "use strict";
+let authenticated = false, authGeneration = 0;
 const $ = (id) => document.getElementById(id);
 const labels = {
   pending: "等待下载",
@@ -105,12 +106,16 @@ function bytes(n) {
   return `${n.toFixed(i ? 1 : 0)} ${units[i]}`;
 }
 async function api(path, options = {}) {
+  if (!authenticated) throw new Error("请先登录管理页面");
+  const authStamp = authGeneration;
   const r = await fetch(path === "/api/accounts" ? path : accountUrl(path), {
     ...options,
     signal: AbortSignal.timeout(12000),
     cache: "no-store",
   });
   const data = await r.json();
+  if (r.status === 401) lockDashboard();
+  if (authStamp !== authGeneration) throw new Error("登录状态已变化，请重试");
   if (!r.ok || !data.ok)
     throw new Error(data.error || data.message || `HTTP ${r.status}`);
   return data;
@@ -539,14 +544,9 @@ $("account").addEventListener("change", () => {
   status();
 });
 $("detail").addEventListener("close", () => $("detail-body").replaceChildren());
-refreshAccounts()
-  .catch((e) => notice(e.message))
-  .finally(() => {
-    navigate();
-    status();
-  });
+bootstrapAccess();
 setInterval(() => {
-  if (document.hidden) return;
+  if (document.hidden || !authenticated) return;
   status();
   if (view !== "bookmarks" && !loading) load();
 }, 3000);
@@ -794,4 +794,81 @@ $("diagnostics-export").onclick = () => {
   const url = URL.createObjectURL(new Blob([JSON.stringify(diagnosticReport, null, 2)], {type:"application/json"}));
   const link = document.createElement("a");link.href = url;link.download = "xbm-diagnostics.json";link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+
+function lockDashboard() {
+  authenticated = false; authGeneration++;
+  document.body.classList.add("locked");
+  for (const dialog of document.querySelectorAll("dialog[open]")) dialog.close();
+  items = []; selectedIds.clear(); generation++; accountsSignature = "";
+  $("content").replaceChildren(); $("detail-body").replaceChildren();
+  $("pair-result").textContent = ""; $("paired-clients").replaceChildren();
+  $("login-dialog").showModal();
+}
+async function unlockDashboard() {
+  authenticated = true; authGeneration++;
+  $("admin-key").value = ""; $("login-message").textContent = "";
+  $("login-dialog").close(); document.body.classList.remove("locked");
+  try { await refreshAccounts(); navigate(); await status(); }
+  catch (error) { notice(error.message); }
+}
+async function accessRequest(path, data) {
+  const response = await fetch(path, {method:"POST", credentials:"same-origin", redirect:"error",
+    headers:{"Content-Type":"application/json", "X-XBM-Action":"access"},
+    body:JSON.stringify(data), signal:AbortSignal.timeout(10000)});
+  const result = await response.json();
+  if (!response.ok || !result.ok) {
+    if (response.status === 401) lockDashboard();
+    throw new Error(result.error || "连接失败，请重试");
+  }
+  return result;
+}
+async function bootstrapAccess() {
+  try {
+    const response = await fetch("/api/access/status", {cache:"no-store", signal:AbortSignal.timeout(10000)});
+    const data = await response.json();
+    if (data.authenticated && data.role === "admin") return unlockDashboard();
+    lockDashboard();
+  } catch (_) { lockDashboard(); $("login-message").textContent = "无法连接服务，请检查 NAS 后刷新页面。"; }
+}
+$("login-dialog").addEventListener("cancel", event => event.preventDefault());
+$("login-form").addEventListener("submit", async event => {
+  event.preventDefault(); $("login-submit").disabled = true;
+  try {
+    await accessRequest("/api/access/login", {key:$("admin-key").value.trim()});
+    await unlockDashboard();
+  } catch (error) { $("login-message").textContent = error.message; }
+  finally { $("login-submit").disabled = false; $("admin-key").value = ""; }
+});
+async function refreshClients() {
+  try {
+    const data = await api("/api/access/clients");
+    $("paired-clients").replaceChildren();
+    if (!data.items.length) $("paired-clients").textContent = "尚未配对浏览器。";
+    for (const item of data.items) {
+      const row = el("div"), button = el("button", "撤销连接", "outline");
+      row.append(el("span", item.name + " · " + date(item.created)), button);
+      button.onclick = async () => {
+        button.disabled = true;
+        try { await accessRequest("/api/access/revoke", {id:item.id}); await refreshClients(); }
+        catch (error) { $("pair-result").textContent = error.message; button.disabled = false; }
+      };
+      $("paired-clients").append(row);
+    }
+  } catch (error) { $("paired-clients").textContent = error.message; }
+}
+$("access-open").onclick = () => { $("pair-server").textContent = location.origin; $("pair-result").textContent = ""; $("access-dialog").showModal(); refreshClients(); };
+$("access-close").onclick = () => { $("pair-result").textContent = ""; $("access-dialog").close(); };
+$("access-refresh").onclick = refreshClients;
+$("pair-create").onclick = async () => {
+  $("pair-create").disabled = true;
+  try {
+    const result = await accessRequest("/api/access/pair-code", {});
+    $("pair-result").textContent = result.code + " · 5 分钟内在扩展设置中使用";
+  } catch (error) { $("pair-result").textContent = error.message; }
+  finally { $("pair-create").disabled = false; }
+};
+$("logout").onclick = async () => {
+  try { await accessRequest("/api/access/logout", {}); lockDashboard(); }
+  catch (error) { $("pair-result").textContent = error.message; }
 };

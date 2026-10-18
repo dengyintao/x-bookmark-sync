@@ -15,11 +15,13 @@ with tempfile.TemporaryDirectory(prefix='xbm-fpk-smoke-') as temporary:
     root = Path(temporary)
     env = dict(os.environ, TRIM_APPDEST=str(package/'app'),
                TRIM_PKGVAR=str(root/'var'), TRIM_PKGETC=str(root/'etc'),
-               TRIM_TEMP_LOGFILE=str(root/'errors.log'))
+               TRIM_TEMP_LOGFILE=str(root/'errors.log'), wizard_admin_password='Synthetic-test-password-2026')
     def hook(name, *args, check=True):
         return subprocess.run([str(package/'cmd'/name), *args], env=env, check=check)
+    def headers():
+        return {'Content-Type':'application/json', 'Authorization':'Bearer '+(root/'var/data/.xbm/admin-key.txt').read_text().strip()}
     def get(path):
-        with urllib.request.urlopen('http://127.0.0.1:8765' + path, timeout=10) as response:
+        with urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8765' + path, headers=headers()), timeout=10) as response:
             return response.read()
     try:
         hook('install_init')
@@ -28,12 +30,13 @@ with tempfile.TemporaryDirectory(prefix='xbm-fpk-smoke-') as temporary:
         hook('main', 'start')
         hook('main', 'status')
         assert b'<html' in get('/').lower()
+        assert (root/'var/data/.xbm/admin-key.txt').stat().st_mode & 0o777 == 0o600
         assert json.loads(get('/api/status'))['version'] == expected_version
         hook('main', 'start')  # idempotent
         # Persist a synthetic bookmark and a media sentinel before lifecycle upgrade.
         request = urllib.request.Request('http://127.0.0.1:8765/api/ingest',
             data=json.dumps({'account':'x:fixture','tweets':[{'tweet_id':'42','text':'upgrade fixture'}]}).encode(),
-            headers={'Content-Type':'application/json'})
+            headers=headers())
         with urllib.request.urlopen(request) as response:
             assert json.load(response)['ok']
         sentinel = root/'var/data/media-sentinel'

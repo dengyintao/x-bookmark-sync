@@ -21,5 +21,5 @@ def report(config):
                            'message': '目录不可写或存储不可用，请检查应用权限和存储卷'})
     return {'ok': True, 'service': 'xbm', 'version': __version__, 'protocol_version': 1,
             'checks': checks, 'proxy_configured': bool(config.proxy.url),
-            'authentication': 'private_network_only',
+            'authentication': 'paired_clients',
             'scope': '仅检查 NAS 存储；X 登录、采集完整性与扩展连接需在浏览器检查'}
