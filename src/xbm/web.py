@@ -129,7 +129,7 @@ def post(handler) -> bool:
     if path in {'/api/bookmarks/delete', '/api/bookmarks/restore'}:
         import json
         if not same_origin(handler, 'bookmarks'):
-            handler._json(403, {'ok': False, 'error': 'same-origin dashboard required'})
+            handler._json(403, {'ok': False, 'error': '请刷新页面后重试，或打开 NAS 直接地址操作', 'code':'dashboard_origin_required'})
             return True
         try:
             length = int(handler.headers.get('Content-Length', 0))
@@ -146,14 +146,8 @@ def post(handler) -> bool:
     match = re.fullmatch(r'/api/downloads/(\d+)/retry', urlsplit(handler.path).path)
     if not match:
         return False
-    # Mutation is available only from our same-origin dashboard, not cross-origin forms.
-    origin = handler.headers.get('Origin')
-    host = handler.headers.get('Host')
-    expected = urlsplit(origin) if origin else None
-    if (handler.headers.get('X-XBM-Action') != 'retry' or
-            (expected and (expected.netloc != host or expected.scheme not in {'http', 'https'})) or
-            handler.headers.get('Sec-Fetch-Site') == 'cross-site'):
-        handler._json(403, {'ok': False, 'error': 'same-origin dashboard required'})
+    if not same_origin(handler, 'retry'):
+        handler._json(403, {'ok': False, 'error': '请刷新页面后重试，或打开 NAS 直接地址操作', 'code':'dashboard_origin_required'})
         return True
     changed = handler.store.retry_media(int(match[1]))
     handler._json(200 if changed else 409, {'ok': changed,
@@ -186,7 +180,7 @@ def management(handler, method):
             if parts.path == '/api/migrations/preview':
                 raise ValueError('use GET for preview')
             if (parts.path == '/api/migrations' or rollback) and not same_origin(handler, 'migrate'):
-                handler._json(403, {'ok': False, 'error': 'same-origin dashboard required'})
+                handler._json(403, {'ok': False, 'error': '请刷新页面后重试，或打开 NAS 直接地址操作', 'code':'dashboard_origin_required'})
                 return True
             length = int(handler.headers.get('Content-Length', 0))
             if not 0 < length <= 8192:
@@ -210,8 +204,27 @@ def management(handler, method):
 
 
 def same_origin(handler, action):
+    """Browser Fetch Metadata survives proxies that rewrite the upstream Host.
+
+    X-XBM-Action forces preflight for cross-origin JS; cross-site form requests
+    cannot supply it. Never trust arbitrary Forwarded/X-Forwarded-Host headers.
+    Non-browser tools without Origin still need the explicit action header.
+    """
+    if handler.headers.get('X-XBM-Action') != action:
+        return False
+    site = handler.headers.get('Sec-Fetch-Site')
+    if site == 'cross-site':
+        return False
     origin = handler.headers.get('Origin')
-    parsed = urlsplit(origin) if origin else None
-    return (handler.headers.get('X-XBM-Action') == action and
-            (not parsed or (parsed.netloc == handler.headers.get('Host') and parsed.scheme in {'http', 'https'})) and
-            handler.headers.get('Sec-Fetch-Site') != 'cross-site')
+    if not origin:
+        return True
+    try:
+        parsed = urlsplit(origin)
+        if parsed.scheme not in {'http', 'https'} or not parsed.hostname or parsed.username or parsed.password or parsed.path not in {'', '/'} or parsed.query or parsed.fragment:
+            return False
+        port = parsed.port or (443 if parsed.scheme == 'https' else 80)
+        expected = urlsplit(parsed.scheme + '://' + handler.headers.get('Host', ''))
+        direct = parsed.hostname.lower() == (expected.hostname or '').lower() and port == (expected.port or (443 if parsed.scheme == 'https' else 80))
+        return direct or site == 'same-origin'
+    except ValueError:
+        return False

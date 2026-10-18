@@ -1,5 +1,5 @@
 appname=x-bookmark-sync
-version=0.5.0
+version=0.5.1
 display_name=X 书签库
 desc=个人 X 书签、同步记录和媒体下载管理。内置服务与运行环境，安装即可使用。
 source=thirdparty
