@@ -5,6 +5,7 @@ For trusted private networks; no independent authentication.
 from __future__ import annotations
 
 import json
+import shutil
 import time
 import re
 from urllib.parse import urlsplit, parse_qs
@@ -130,6 +131,7 @@ class Handler(BaseHTTPRequestHandler):
                 "watermark": self.store.latest_tweet_id(),
                 "media": self.store.media_stats(),
                 "media_dir": str(self.config.media_dir),
+                "storage_free": shutil.disk_usage(self.config.media_dir if self.config.media_dir.exists() else self.config.data_root).free,
                 "time": time.time(),
             })
         else:

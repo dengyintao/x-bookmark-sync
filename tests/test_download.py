@@ -170,3 +170,20 @@ class DownloadTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class DiskSpaceTest(unittest.TestCase):
+    def test_low_space_does_not_claim_or_consume_retry(self):
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        with TemporaryDirectory() as tmp:
+            cfg = Config(data_root=Path(tmp))
+            store = Store(cfg.state_dir / 'xbm.db')
+            store.add_media('1','photo','https://pbs.twimg.com/sample.jpg')
+            worker = Downloader(cfg,store)
+            with patch('xbm.downloader.shutil.disk_usage',return_value=SimpleNamespace(free=1024)), \
+                 patch.object(worker._stop,'wait',side_effect=lambda _: worker._stop.set()):
+                worker._loop()
+            self.assertEqual(store.media_stats()['pending'],1)
+            self.assertEqual(store.list_downloads()['items'][0]['retries'],0)
+            worker.stop()
+            store.close()

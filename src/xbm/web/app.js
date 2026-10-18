@@ -125,6 +125,7 @@ async function status() {
     const data = await api("/api/status");
     if (account !== selectedAccount) return;
     const m = data.media;
+    if (data.storage_free < 512 * 1024 * 1024) notice("存储空间不足 512 MB，已暂停领取新下载任务。请释放空间或迁移数据目录。");
     $("count-tweets").textContent = data.tweets.toLocaleString();
     $("count-done").textContent = m.done.toLocaleString();
     $("count-pending").textContent = `${m.downloading} / ${m.pending}`;

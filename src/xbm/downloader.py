@@ -123,6 +123,10 @@ class Downloader:
 
     def _loop(self) -> None:
         while not self._stop.is_set():
+            self.cfg.media_dir.mkdir(parents=True, exist_ok=True)
+            if shutil.disk_usage(self.cfg.media_dir).free < 512 * 1024 * 1024:
+                self._stop.wait(30)
+                continue
             job = self.store.claim_media(self.cfg.download.max_retries)
             if not job:
                 self._stop.wait(_IDLE_SLEEP)
@@ -211,6 +215,8 @@ class Downloader:
                 self.store.update_progress(media_id, received, total, 0)
             with open(part, mode) as f:
                 for chunk in r.iter_bytes(_CHUNK):
+                    if shutil.disk_usage(self.cfg.media_dir).free < 128 * 1024 * 1024:
+                        raise OSError("Insufficient disk space; download paused")
                     f.write(chunk)
                     received += len(chunk)
                     now = time.monotonic()
