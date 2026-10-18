@@ -774,3 +774,24 @@ $("ownership-confirm").addEventListener("click", async () => {
 setInterval(() => {
   if ($("ownership").open && !document.hidden) ownershipHistory();
 }, 3000);
+
+let diagnosticReport = null;
+$("diagnostics-close").onclick = () => $("diagnostics").close();
+$("diagnostics-open").onclick = async () => {
+  $("diagnostics").showModal();
+  $("diagnostics-result").textContent = "检查中…";
+  $("diagnostics-export").disabled = true;
+  diagnosticReport = null;
+  try {
+    diagnosticReport = await api("/api/diagnostics");
+    $("diagnostics-result").textContent = "服务版本：" + diagnosticReport.version + "\n" +
+      diagnosticReport.checks.map(c => (c.name === "media_storage" ? "媒体存储" : "数据库存储") + "：" + c.message + (c.free_bytes !== undefined ? " · 剩余 " + bytes(c.free_bytes) : "")).join("\n") + "\n" + diagnosticReport.scope;
+    $("diagnostics-export").disabled = false;
+  } catch (error) { $("diagnostics-result").textContent = "诊断失败：" + error.message; }
+};
+$("diagnostics-export").onclick = () => {
+  if (!diagnosticReport) return;
+  const url = URL.createObjectURL(new Blob([JSON.stringify(diagnosticReport, null, 2)], {type:"application/json"}));
+  const link = document.createElement("a");link.href = url;link.download = "xbm-diagnostics.json";link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};

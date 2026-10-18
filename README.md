@@ -222,3 +222,24 @@ python3 scripts/build_release.py --fnpack /path/to/fnpack --tag v0.4.1
 ```
 
 源码包来自当前提交的 git archive；本地未提交改动不会打入源码包。发布前先提交改动，再推送对应版本标签。
+
+### 发布前诊断与升级核验（开发中）
+
+NAS 页面的“连接诊断”检查数据库和媒体目录是否可写、剩余空间及服务版本，可以导出脱敏 JSON。报告不包含书签正文、用户名、目录路径或代理密钥；它不代表 X 登录或历史采集完整性检查已经通过。
+
+**不能把 `appcenter-cli install-fpk` 返回成功当成完成升级。** 已观察到对已安装应用跳过更新的情况。优先通过飞牛应用中心的安装界面操作，随后显式核对目标版本：
+
+```bash
+python3 scripts/check_deployment.py --url http://NAS-IP:8765 --expect 0.5.0
+```
+
+若版本不符，检查失败并返回非零退出码。不要通过卸载删除数据来尝试修复。应用中心升级及回滚仍需按 [发布验收清单](docs/RELEASE_CHECKLIST.md) 在隔离环境验证。
+
+新的独立运行包提供元数据备份命令（旧版 0.5.0 包尚不含此命令）：
+
+```bash
+/var/apps/x-bookmark-sync/target/server/xbm --backup-metadata \
+  /var/apps/x-bookmark-sync/etc/config.toml /YOUR-BACKUP-VOLUME/xbm-backup-UNIQUE
+```
+
+目标目录必须不存在且应用用户有写权限。备份包含配置与各账户 SQLite 快照，校验后才公布为完整目录；包含敏感配置，目录权限为 700。**媒体不包含在此备份中**，仍需独立备份。用于版本升级前的快照应先停止应用，避免多个账户在不同时间点产生变化。恢复流程仍在发布验收清单内，不能把创建快照成功等同于恢复验收通过。

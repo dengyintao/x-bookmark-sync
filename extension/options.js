@@ -40,7 +40,7 @@ async function loadHistory() {
   const data = await chrome.storage.local.get({ xbm_task_history: [], xbm_sync_status: {} });
   const entries = data.xbm_task_history.length ? data.xbm_task_history :
     (data.xbm_sync_status.state ? [data.xbm_sync_status] : []);
-  const labels = {waiting_browser: '等待打开书签页', no_capture:'未捕获数据（未确认成功）', idle:'已提交 NAS', collecting:'采集中', needs_login:'需要登录', pending_delivery:'等待补传', error:'失败'};
+  const labels = {interrupted: '采集已中断，完整性未确认', waiting_browser: '等待打开书签页', no_capture:'未捕获数据（未确认成功）', idle:'已提交 NAS', collecting:'采集中', needs_login:'需要登录', pending_delivery:'等待补传', error:'失败'};
   const container = document.getElementById('history');
   container.replaceChildren();
   if (!entries.length) container.textContent = '暂无任务记录';

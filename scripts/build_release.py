@@ -86,10 +86,17 @@ def build(fnpack, output, tag=''):
         subprocess.run([str(application/'app/server/xbm'), '--help'], check=True)
         subprocess.run([str(application/'app/server/xbm'), '--gallery-dl', '--version'], check=True)
         subprocess.run([str(application/'app/ffmpeg'), '-version'], check=True)
-        subprocess.run([sys.executable, str(ROOT/'scripts/test_fpk.py'), str(application)], check=True)
         subprocess.run([str(fnpack.resolve()), 'build', '-d', str(application)], cwd=staging, check=True)
         fpk = staging/(manifest['appname']+'.fpk')
         verify_fpk(fpk, manifest)
+        unpacked = staging/'unpacked'
+        unpacked.mkdir()
+        with tarfile.open(fpk, 'r:gz') as archive:
+            archive.extractall(unpacked, filter='data')
+        (unpacked/'app').mkdir()
+        with tarfile.open(unpacked/'app.tgz', 'r:gz') as archive:
+            archive.extractall(unpacked/'app', filter='data')
+        subprocess.run([sys.executable, str(ROOT/'scripts/test_fpk.py'), str(unpacked)], check=True)
         shutil.copy2(fpk, output/f'x-bookmark-sync-{version}.fpk')
         # Build a wheel without bundling runtime dependencies or private config.
         subprocess.run([sys.executable, '-m', 'pip', 'wheel', '--no-deps', '--no-build-isolation', '.', '-w', str(staging/'wheels')], cwd=ROOT, check=True)

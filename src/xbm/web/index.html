@@ -41,6 +41,7 @@
           <h1 id="title">全部书签</h1>
           <p id="subtitle">值得保存的内容，随时回看。</p>
         </div>
+        <button id="diagnostics-open" class="outline">连接诊断</button>
         <button id="ownership-open" class="outline">旧数据归属</button
         ><button id="refresh" class="outline">↻ 刷新</button>
       </header>
@@ -129,6 +130,12 @@
       <button id="ownership-confirm" hidden>确认归属</button>
       <h3>归属任务记录</h3>
       <div id="ownership-history" aria-live="polite"></div>
+    </dialog>
+    <dialog id="diagnostics"><h2>连接与存储诊断</h2>
+      <p>导出内容不含书签正文、账号、目录路径或连接密钥。</p>
+      <pre id="diagnostics-result"></pre>
+      <button id="diagnostics-export" disabled>导出诊断</button>
+      <button id="diagnostics-close" class="outline">关闭</button>
     </dialog>
   </body>
 </html>

@@ -9,6 +9,8 @@ import tempfile
 import urllib.request
 
 package = Path(sys.argv[1]).resolve()
+expected_version = dict(line.split('=', 1) for line in (package/'manifest').read_text().splitlines() if '=' in line)
+expected_version = {k.strip(): v.strip() for k, v in expected_version.items()}['version']
 with tempfile.TemporaryDirectory(prefix='xbm-fpk-smoke-') as temporary:
     root = Path(temporary)
     env = dict(os.environ, TRIM_APPDEST=str(package/'app'),
@@ -26,13 +28,27 @@ with tempfile.TemporaryDirectory(prefix='xbm-fpk-smoke-') as temporary:
         hook('main', 'start')
         hook('main', 'status')
         assert b'<html' in get('/').lower()
-        assert json.loads(get('/api/status'))['version'] == '0.5.0'
+        assert json.loads(get('/api/status'))['version'] == expected_version
         hook('main', 'start')  # idempotent
+        # Persist a synthetic bookmark and a media sentinel before lifecycle upgrade.
+        request = urllib.request.Request('http://127.0.0.1:8765/api/ingest',
+            data=json.dumps({'account':'x:fixture','tweets':[{'tweet_id':'42','text':'upgrade fixture'}]}).encode(),
+            headers={'Content-Type':'application/json'})
+        with urllib.request.urlopen(request) as response:
+            assert json.load(response)['ok']
+        sentinel = root/'var/data/media-sentinel'
+        sentinel.write_bytes(b'preserve media')
         hook('upgrade_init')
         assert hook('main', 'status', check=False).returncode == 3
         hook('upgrade_callback')
         assert (root/'etc/config.toml').read_bytes() == original
         hook('main', 'start')
+        assert json.loads(get('/api/status?account=x:fixture'))['tweets'] == 1
+        assert sentinel.read_bytes() == b'preserve media'
+        subprocess.run([str(package/'app/server/xbm'), '--backup-metadata',
+                        str(root/'etc/config.toml'), str(root/'backup')], check=True)
+        assert (root/'backup/databases/accounts/fixture/.xbm/xbm.db').exists()
+        assert not (root/'backup/media-sentinel').exists()
         hook('uninstall_init')
         assert (root/'etc/config.toml').exists()
         assert (root/'var/data').exists()

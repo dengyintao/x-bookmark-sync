@@ -15,7 +15,10 @@ alive() {
 }
 case "${1:-}" in
  start)
-    alive && exit 0
+    if alive; then
+        "$TRIM_APPDEST/server/xbm" --check-service http://127.0.0.1:8765 "$TRIM_PKGETC/config.toml" >> "$TRIM_PKGVAR/server.log" 2>&1
+        exit $?
+    fi
     mkdir -p "$TRIM_PKGVAR" "$TRIM_PKGETC"
     "$TRIM_APPDEST/server/xbm" --config "$TRIM_PKGETC/config.toml" serve --port 8765 >> "$TRIM_PKGVAR/server.log" 2>&1 &
     echo $! > "$pidfile"
@@ -24,6 +27,11 @@ case "${1:-}" in
     if ! alive; then
         tail -n 15 "$TRIM_PKGVAR/server.log" > "${TRIM_TEMP_LOGFILE:-/dev/stderr}"
         rm -f "$pidfile"
+        exit 1
+    fi
+    if ! "$TRIM_APPDEST/server/xbm" --check-service http://127.0.0.1:8765 "$TRIM_PKGETC/config.toml" >> "$TRIM_PKGVAR/server.log" 2>&1; then
+        if alive; then kill "$pid"; fi
+        echo "服务启动验证失败，请检查日志中的版本和存储配置。" > "${TRIM_TEMP_LOGFILE:-/dev/stderr}"
         exit 1
     fi ;;
  stop)

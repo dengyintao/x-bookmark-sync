@@ -310,3 +310,32 @@ test('explicit timeline end and cancellation produce distinct outcomes',async()=
  assert.equal((await collectionHarness({end:true}).run()).reason,'end');
  assert.equal((await collectionHarness({stop:true}).run()).reason,'stopped');
 });
+
+test('slow network does not delay durable capture and newer payload survives acknowledgement',async()=>{
+ const h=setup({});let release;
+ await vm.runInContext("enqueue([{tweet_id:'1',text:'old'}], 'x:fixture')",h.context);
+ h.context.fetch=async()=>{await new Promise(r=>release=r);return {ok:true,json:async()=>({ok:true,account:'x:fixture'})}};
+ const delivery=vm.runInContext("flushQueue('http://nas')",h.context);
+ await new Promise(setImmediate);
+ await vm.runInContext("enqueue([{tweet_id:'1',text:'new'},{tweet_id:'2'}], 'x:fixture')",h.context);
+ assert.equal(h.stored.xbm_pending_queue.length,2);
+ release();await delivery;
+ assert.equal(h.stored.xbm_pending_queue.length,2);
+ assert.equal(h.stored.xbm_pending_queue[0].text,'new');
+});
+test('startup marks unfinished collection interrupted and retries pending delivery',async()=>{
+ const h=setup({});h.stored.xbm_sync_status={state:'collecting'};
+ h.stored.xbm_pending_queue=[{tweet_id:'1'}];
+ await vm.runInContext('initialize()',h.context);
+ assert.equal(h.stored.xbm_pending_queue.length,0);
+ assert.equal(h.stored.xbm_sync_status.state,'interrupted');
+ assert.equal(h.stored.xbm_sync_status.reason,'interrupted');
+});
+test('startup outage preserves queue and communicates incomplete history',async()=>{
+ const h=setup({});h.stored.xbm_sync_status={state:'collecting'};
+ h.stored.xbm_pending_queue=[{tweet_id:'1'}];h.context.fetch=async()=>{throw Error('offline')};
+ await vm.runInContext('initialize()',h.context);
+ assert.equal(h.stored.xbm_pending_queue.length,1);
+ assert.equal(h.stored.xbm_sync_status.state,'pending_delivery');
+ assert.equal(h.stored.xbm_sync_status.reason,'interrupted');
+});

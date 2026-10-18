@@ -121,7 +121,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if web.get(self):
             return
-        if parts.path == "/api/status":
+        if parts.path == "/api/diagnostics":
+            from .diagnostics import report
+            self._json(200, report(self.config))
+        elif parts.path == "/api/status":
             self._json(200, {
                 "ok": True,
                 "service": "xbm",

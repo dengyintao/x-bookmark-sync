@@ -66,6 +66,7 @@ async function collectWithRetry(tabId, options) {
 }
 
 let queueWork = Promise.resolve();
+let deliveryWork = null;
 let syncWork = null;
 let collectingTab = null;
 function serializeQueue(fn) {
@@ -112,9 +113,14 @@ async function enqueueUnlocked(tweets, account = '') {
 }
 
 function enqueue(tweets, account = '') { return serializeQueue(() => enqueueUnlocked(tweets, account)); }
-function flushQueue(serverUrl) { return serializeQueue(() => flushQueueUnlocked(serverUrl)); }
+function flushQueue(serverUrl) {
+  if (deliveryWork) return deliveryWork;
+  deliveryWork = flushQueueUnlocked(serverUrl).finally(() => { deliveryWork = null; });
+  return deliveryWork;
+}
 async function flushQueueUnlocked(serverUrl) {
-  const data = await chrome.storage.local.get({ [QUEUE_KEY]: [] });
+  // Snapshot this delivery run. Network waits must never block durable captures.
+  const data = await serializeQueue(() => chrome.storage.local.get({ [QUEUE_KEY]: [] }));
   let q = data[QUEUE_KEY];
   while (q.length) {
     const account = q[0]._xbm_account || '';
@@ -122,11 +128,17 @@ async function flushQueueUnlocked(serverUrl) {
     while (length < q.length && length < BATCH_SIZE && (q[length]._xbm_account || '') === account) length++;
     const batch = q.slice(0, length);
     await pushToServer(serverUrl, batch, account);
+    await serializeQueue(async () => {
+      const current = await chrome.storage.local.get({ [QUEUE_KEY]: [] });
+      // Only remove the exact acknowledged payload. A newer capture of the same
+      // tweet stays queued, even if it arrived while the old copy was uploading.
+      const acknowledged = new Set(batch.map(t => JSON.stringify(t)));
+      await chrome.storage.local.set({ [QUEUE_KEY]: current[QUEUE_KEY].filter(t => !acknowledged.has(JSON.stringify(t))) });
+    });
     q = q.slice(batch.length);
-    await chrome.storage.local.set({ [QUEUE_KEY]: q });
   }
-  const status = await chrome.storage.local.get({ [STATUS_KEY]: {} });
-  if (status[STATUS_KEY] && status[STATUS_KEY].state === 'pending_delivery') {
+  const status = await chrome.storage.local.get({ [STATUS_KEY]: {}, [QUEUE_KEY]: [] });
+  if (!status[QUEUE_KEY].length && status[STATUS_KEY] && status[STATUS_KEY].state === 'pending_delivery') {
     await saveStatus({ ...status[STATUS_KEY], state: 'idle', error: '', lastDeliveredAt: Date.now() });
   }
 }
@@ -179,14 +191,15 @@ async function runSyncOnce(opts) {
   if (!res || !res.ok) throw new Error((res && res.error) || '采集失败，请检查 X 页面');
   if (!validAccount(res.account)) throw new Error('无法识别当前登录的 X 账户，请刷新书签页后重试');
   if (!res.tweets || !res.tweets.length) {
-    await saveStatus({ state: 'no_capture', count: 0, diagnostics: res.diagnostics || {},
-      error: '本轮未捕获书签，尚不能确认书签为空。请检查保留页面与采集诊断。' });
+    await saveStatus({ state: res.reason === 'end' ? 'idle' : 'no_capture', reason: res.reason || '', account: res.account, count: 0, diagnostics: res.diagnostics || {},
+      error: res.reason === 'end' ? '' : '本轮未捕获书签，尚不能确认书签为空。请检查页面与采集诊断。' });
     return { ok: true, count: 0, noCapture: true };
   }
   if (res.tweets && res.tweets.length) await enqueue(res.tweets, res.account);
   let deliveryError = '';
   try { await flushQueue(cfg.serverUrl); } catch (e) { deliveryError = e.message; }
-  await saveStatus({ state: deliveryError ? 'pending_delivery' : 'idle',
+  const remaining = await chrome.storage.local.get({[QUEUE_KEY]: []});
+  await saveStatus({ state: deliveryError || remaining[QUEUE_KEY].length ? 'pending_delivery' : 'idle',
     account: res.account, reason:res.reason || '', count: (res.tweets || []).length, error: deliveryError, lastCollectedAt: Date.now() });
   return { ok: true, account: res.account, count: (res.tweets || []).length, pendingDelivery: !!deliveryError };
 
@@ -264,14 +277,20 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
   }
 });
 
-// 安装/启动时建定时器
-chrome.runtime.onInstalled.addListener(async function () {
+// Startup repairs stale collection state and immediately retries the durable outbox.
+async function initialize() {
   const cfg = await getConfig();
-  chrome.alarms.create(ALARM_NAME, { periodInMinutes: cfg.intervalMinutes });
-  chrome.alarms.create(RETRY_ALARM, { periodInMinutes: 5 });
-});
-chrome.runtime.onStartup.addListener(async function () {
-  const cfg = await getConfig();
-  chrome.alarms.create(ALARM_NAME, { periodInMinutes: cfg.intervalMinutes });
-  chrome.alarms.create(RETRY_ALARM, { periodInMinutes: 5 });
-});
+  await chrome.alarms.create(ALARM_NAME, { periodInMinutes: cfg.intervalMinutes });
+  await chrome.alarms.create(RETRY_ALARM, { periodInMinutes: 5 });
+  const data = await chrome.storage.local.get({[STATUS_KEY]: {}, [QUEUE_KEY]: []});
+  if (!syncWork && data[STATUS_KEY].state === 'collecting') {
+    await saveStatus({...data[STATUS_KEY], state: 'interrupted', reason: 'interrupted',
+      error: '浏览器或扩展已重启，历史采集完整性未确认；已保存内容会继续补传，请重新开始采集。'});
+  }
+  try { await flushQueue(cfg.serverUrl); }
+  catch (e) { await saveStatus({...data[STATUS_KEY], state:'pending_delivery',
+    reason: data[STATUS_KEY].state === 'collecting' ? 'interrupted' : data[STATUS_KEY].reason,
+    error:e.message}); }
+}
+chrome.runtime.onInstalled.addListener(initialize);
+chrome.runtime.onStartup.addListener(initialize);
