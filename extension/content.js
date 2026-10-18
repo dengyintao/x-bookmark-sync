@@ -79,7 +79,6 @@
   async function autoScroll(maxScrolls, account) {
     let unchanged = 0, lastCount = -1;
     const startedAt = Date.now();
-    window.scrollTo(0, 0);
     for (let i = 0; i < maxScrolls; i++) {
       if (cancelled) return {reason:'stopped', scrolls:i};
       if (currentAccount() !== account || pageType() !== 'bookmarks') throw new Error('账户或页面已变化，采集已停止');
@@ -120,6 +119,7 @@
           const account = currentAccount();
           if (!account) throw new Error('无法识别当前登录的 X 账户，请刷新书签页后重试');
           // 先等页面初始加载出第一批
+          if (!msg.full) window.scrollTo(0, 0);
           await sleep(3000);
           const outcome = await autoScroll(msg.full ? (msg.maxScrolls || 300) : 2, account);
           await sleep(1500);
