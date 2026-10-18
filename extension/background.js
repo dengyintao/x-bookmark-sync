@@ -283,8 +283,16 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
 });
 
 // Startup repairs stale collection state and immediately retries the durable outbox.
-async function initialize() {
+async function initialize(details = {}) {
   const cfg = await getConfig();
+  if (details.reason === 'update' && /^0\.3\./.test(details.previousVersion || '')) {
+    const saved = await chrome.storage.sync.get({serverUrl:''});
+    if (saved.serverUrl) {
+      const legacy = await chrome.storage.local.get({xbm_legacy_origins:{}});
+      legacy.xbm_legacy_origins[nasOrigin(saved.serverUrl)] = true;
+      await chrome.storage.local.set({xbm_legacy_origins:legacy.xbm_legacy_origins});
+    }
+  }
   await chrome.alarms.create(ALARM_NAME, { periodInMinutes: cfg.intervalMinutes });
   await chrome.alarms.create(RETRY_ALARM, { periodInMinutes: 5 });
   const data = await chrome.storage.local.get({[STATUS_KEY]: {}, [QUEUE_KEY]: []});

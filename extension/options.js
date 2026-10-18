@@ -80,7 +80,9 @@ document.getElementById('pair').addEventListener('click', async () => {
       throw new Error(result.error || '配对失败，请重新生成配对码');
     const data = await chrome.storage.local.get({xbm_connections:{}});
     data.xbm_connections[origin] = {token:result.token, id:result.id, expires:result.expires};
-    await chrome.storage.local.set({xbm_connections:data.xbm_connections});
+    const legacy = await chrome.storage.local.get({xbm_legacy_origins:{}});
+    delete legacy.xbm_legacy_origins[origin];
+    await chrome.storage.local.set({xbm_connections:data.xbm_connections,xbm_legacy_origins:legacy.xbm_legacy_origins});
     await chrome.storage.sync.set({serverUrl:origin});
     document.getElementById('pairCode').value = '';
     chrome.runtime.sendMessage({type:'retry-delivery'}).catch(console.warn);

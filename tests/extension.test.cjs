@@ -363,3 +363,12 @@ test('revoked credential keeps the outbox and asks for pairing',async()=>{
  await assert.rejects(vm.runInContext("flushQueue('http://nas')",h.context),/配对已失效/);
  assert.equal(h.stored.xbm_pending_queue.length,1);
 });
+
+test('existing legacy origin stays compatible but never bypasses a secured NAS',async()=>{
+ const h=setup({});h.stored.xbm_connections={};h.stored.xbm_legacy_origins={'http://nas':true};let requests=[];
+ h.context.fetch=async(url,options)=>{requests.push({url,options});if(url.endsWith('/api/health'))return {status:404};if(url.endsWith('/api/status'))return {ok:true,json:async()=>({service:'xbm',version:'0.5.2'})};return {ok:true,status:200,json:async()=>({ok:true})}};
+ await vm.runInContext("nasRequest('http://nas','/api/ingest',{method:'POST',body:'{}'})",h.context);
+ assert.equal(requests.at(-1).options.headers.Authorization,undefined);
+ h.context.fetch=async()=>({status:200});
+ await assert.rejects(vm.runInContext("nasRequest('http://nas','/api/ingest',{method:'POST',body:'{}'})",h.context),/重新配对/);
+});
