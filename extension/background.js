@@ -67,6 +67,7 @@ async function collectWithRetry(tabId, options) {
 
 let queueWork = Promise.resolve();
 let syncWork = null;
+let collectingTab = null;
 function serializeQueue(fn) {
   const work = queueWork.then(fn);
   queueWork = work.catch(function () {});
@@ -149,7 +150,7 @@ function runSync(opts) {
   syncWork = runSyncOnce(opts).catch(async error => {
     await saveStatus({ state: /登录/.test(error.message) ? 'needs_login' : 'error', error: error.message });
     throw error;
-  }).finally(() => { syncWork = null; });
+  }).finally(() => { syncWork = null; collectingTab = null; });
   return syncWork;
 }
 async function runSyncOnce(opts) {
@@ -169,9 +170,11 @@ async function runSyncOnce(opts) {
     }
     throw new Error(error);
   }
+  collectingTab = tab.id;
+  await chrome.storage.local.set({xbm_collect_progress:{count:0,scrolls:0,startedAt:Date.now(),updatedAt:Date.now()}});
   await saveStatus({ state: 'collecting' });
   const res = await collectWithRetry(tab.id, {
-    type: 'collect', full: !!opts.full, maxScrolls: opts.full ? 60 : 2,
+    type: 'collect', full: !!opts.full, maxScrolls: opts.full ? 300 : 2,
   });
   if (!res || !res.ok) throw new Error((res && res.error) || '采集失败，请检查 X 页面');
   if (!validAccount(res.account)) throw new Error('无法识别当前登录的 X 账户，请刷新书签页后重试');
@@ -184,7 +187,7 @@ async function runSyncOnce(opts) {
   let deliveryError = '';
   try { await flushQueue(cfg.serverUrl); } catch (e) { deliveryError = e.message; }
   await saveStatus({ state: deliveryError ? 'pending_delivery' : 'idle',
-    account: res.account, count: (res.tweets || []).length, error: deliveryError, lastCollectedAt: Date.now() });
+    account: res.account, reason:res.reason || '', count: (res.tweets || []).length, error: deliveryError, lastCollectedAt: Date.now() });
   return { ok: true, account: res.account, count: (res.tweets || []).length, pendingDelivery: !!deliveryError };
 
 }
@@ -225,29 +228,39 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
   }
   if (msg && msg.type === 'collect-progress') {
     // Frequent page messages keep a long collection observable without storing tweet text.
-    chrome.storage.local.set({ xbm_collect_progress: { scrolls: msg.scrolls, updatedAt: Date.now() } }).catch(console.warn);
+    if (sender.tab && (collectingTab === null || sender.tab.id === collectingTab)) {
+      collectingTab = sender.tab.id;
+      chrome.storage.local.set({ xbm_collect_progress: { account:msg.account,count:msg.count,scrolls:msg.scrolls,phase:msg.phase,startedAt:msg.startedAt,maxScrolls:msg.maxScrolls,updatedAt:Date.now() } }).catch(console.warn);
+    }
   }
   if (msg && msg.type === 'tweets-captured' && msg.tweets && msg.tweets.length) {
     (async function () {
       if (!validAccount(msg.account)) throw new Error('无法识别捕获数据所属的 X 账户，请刷新书签页后重试');
       await enqueue(msg.tweets, msg.account);
       sendResponse({ ok: true });
-      await saveStatus({ state: 'pending_delivery', account: msg.account, lastCollectedAt: Date.now() });
+      if (!syncWork) await saveStatus({ state: 'pending_delivery', account: msg.account, lastCollectedAt: Date.now() });
       const cfg = await getConfig();
       try { await flushQueue(cfg.serverUrl); }
-      catch (e) { await saveStatus({ state: 'pending_delivery', error: e.message }); }
+      catch (e) { if (!syncWork) await saveStatus({ state: 'pending_delivery', error: e.message }); }
     })().catch(e => {
       sendResponse({ ok: false, error: e.message });
       saveStatus({ state: 'error', error: e.message }).catch(console.warn);
     });
     return true;
   }
-  if (msg && msg.type === 'manual-sync') {
-    runSync({ full: !!msg.full }).then(
-      function (r) { sendResponse({ ok: true, result: r }); },
-      function (e) { sendResponse({ ok: false, error: String(e && e.message || e) }); }
-    );
+  if (msg && msg.type === 'stop-sync') {
+    (async () => {
+      const tab = collectingTab !== null ? {id:collectingTab} : await findBookmarkTab();
+      if (tab) await chrome.tabs.sendMessage(tab.id,{type:'stop-collect'});
+      sendResponse({ok:true});
+    })().catch(e => sendResponse({ok:false,error:e.message}));
     return true;
+  }
+  if (msg && msg.type === 'manual-sync') {
+    // Acknowledge immediately: popup closure must not own a long-running job.
+    runSync({ full: !!msg.full }).catch(e => console.warn('[xbm] collection:', e.message));
+    sendResponse({ ok: true, started: true });
+    return;
   }
 });
 

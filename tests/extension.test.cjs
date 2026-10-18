@@ -288,3 +288,25 @@ test('settings page reports login identity and detects an account switch without
  assert.deepEqual(messages.map(m=>m.type),['account-observed','account-observed']);
  assert.deepEqual(messages.map(m=>m.account),['x:alpha','x:beta']);
 });
+
+function collectionHarness({grow=true,end=false,stop=false}={}) {
+  let listener,scrolls=0,reads=0; const handlers=[]; const progress=[];
+  const win={addEventListener:(kind,fn)=>{if(kind==='message')handlers.push(fn)},removeEventListener:(kind,fn)=>{const i=handlers.indexOf(fn);if(i>=0)handlers.splice(i,1)},scrollTo:()=>scrolls++,
+    postMessage:msg=>{if(msg.type==='get-buffer')setImmediate(()=>{reads++;const count=grow?reads:1;const data={__xbm:true,type:'buffer',account:'x:fixture',tweets:Array.from({length:count},(_,i)=>({tweet_id:String(i+1)})),diagnostics:{ended:end}};handlers.slice().forEach(fn=>fn({source:win,data}));});}};
+  const c=vm.createContext({window:win,setTimeout:(fn,ms)=>ms===3000?setTimeout(fn,ms):setImmediate(fn),clearTimeout,setInterval(){},console,
+    document:{addEventListener(){},body:{scrollHeight:1000},documentElement:{scrollHeight:1000},readyState:'complete',querySelector:()=>({getAttribute:()=>'/fixture'})},
+    location:{pathname:'/i/bookmarks',href:'https://x.com/i/bookmarks'},
+    chrome:{runtime:{onMessage:{addListener(fn){listener=fn}},sendMessage:async msg=>{if(msg.type==='collect-progress'){progress.push(msg);if(stop)listener({type:'stop-collect'},{},()=>{});}return {ok:true}}}}});
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../extension/content.js'),'utf8'),c);
+  return {progress,get scrolls(){return scrolls},run:()=>new Promise(resolve=>listener({type:'collect',full:true,maxScrolls:15},{},resolve))};
+}
+test('virtualized constant-height page continues while captures increase',async()=>{
+ const h=collectionHarness();const result=await h.run();assert.equal(result.ok,true);assert.equal(result.reason,'limit');assert.equal(result.scrolls,15);assert.equal(h.progress.length,15);
+});
+test('no new data is stalled, not claimed complete',async()=>{
+ const h=collectionHarness({grow:false});const result=await h.run();assert.equal(result.reason,'stalled');assert.ok(h.progress.length>=10);
+});
+test('explicit timeline end and cancellation produce distinct outcomes',async()=>{
+ assert.equal((await collectionHarness({end:true}).run()).reason,'end');
+ assert.equal((await collectionHarness({stop:true}).run()).reason,'stopped');
+});

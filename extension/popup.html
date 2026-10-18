@@ -1,15 +1,9 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head><meta charset="utf-8"><style>
-body{width:220px;padding:12px;font-family:system-ui,sans-serif;font-size:13px}
-button{width:100%;margin:4px 0;padding:8px;border:1px solid #ccc;border-radius:6px;background:#1d9bf0;color:#fff;cursor:pointer}
-button.ghost{background:#fff;color:#333}
-#status{margin-top:8px;color:#666;min-height:18px}
-</style></head>
-<body>
-<button id="sync">立即同步书签</button>
-<button id="full" class="ghost">历史回填（最多 60 轮）</button>
-<button id="options" class="ghost">设置与任务记录</button>
-<div id="status"></div>
-<script src="popup.js"></script>
-</body></html>
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><style>
+body{width:330px;padding:16px;font:14px system-ui;color:#213047}h2{margin:0 0 10px}button{width:100%;margin:5px 0;padding:10px;border:1px solid #d6dce4;border-radius:8px;background:#1677db;color:white;cursor:pointer}button.ghost{background:white;color:#213047}button:disabled{opacity:.5;cursor:default}p{line-height:1.6;font-size:12px;color:#536378}#status,#progress{line-height:1.6;margin:10px 0;white-space:pre-line}#progress{padding:10px;background:#edf5ff;border-radius:8px}a{color:#1677db}
+</style></head><body><h2>X 书签同步</h2>
+<p>① 在设置中测试 NAS 连接<br>② 登录 X 并打开书签页<br>③ 点自动采集，无需手动下拉。保持页面打开，关闭此弹窗不影响采集。</p>
+<button id="full">自动采集历史书签</button><button id="sync" class="ghost">快速同步（最近内容）</button>
+<button id="stop" class="ghost" hidden>停止采集，保留已捕获内容</button>
+<div id="progress" role="status" hidden></div><div id="status" role="status"></div>
+<p>总书签数由 X 决定，无法预先计算百分比。长时间无新增会停止并提示；不等于已读取全部。网络恢复后待传内容会自动补传。</p>
+<button id="nas" class="ghost">打开 NAS 管理页</button><button id="options" class="ghost">设置与任务记录</button><script src="popup.js"></script></body></html>

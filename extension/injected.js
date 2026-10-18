@@ -99,7 +99,7 @@
     return tweets;
   }
 
-  function handleJson(url, json, account) {
+  function handleJson(url, json, account, httpStatus = 200) {
     // 只关心 GraphQL 响应；Bookmarks 相关优先，其他时间线也顺手收（去重兜底）
     if (url.indexOf('/graphql/') === -1) return;
     const operation = url.split('/graphql/')[1].split('?')[0].split('/').pop();
@@ -107,7 +107,16 @@
     diagnostics.operations = Array.from(new Set(diagnostics.operations.concat(operation))).slice(-10);
     // Avoid parsing unrelated home/likes timelines even while the bookmarks page is open.
     if (!/bookmark/i.test(operation)) return;
+    if (!account || account !== currentAccount()) return;
     diagnostics.responses++;
+    diagnostics.httpStatus = httpStatus;
+    diagnostics.ended = false;
+    function terminal(node) {
+      if (!node || typeof node !== 'object') return;
+      if (node.type === 'TimelineTerminateTimeline' && node.direction === 'Bottom') diagnostics.ended = true;
+      Object.values(node).forEach(terminal);
+    }
+    terminal(json);
     diagnostics.dataKeys = Object.keys((json && json.data) || {}).slice(0, 20);
     // Bind the response to the account at request time, never the currently selected author.
     if (!account || account !== currentAccount()) return;
@@ -133,7 +142,7 @@
     if (url.indexOf('/graphql/') !== -1) {
       try {
         const clone = resp.clone();
-        clone.json().then(function (j) { handleJson(url, j, account); }).catch(function () {});
+        clone.json().then(function (j) { handleJson(url, j, account, resp.status); }).catch(function () {});
       } catch (e) {}
     }
     return resp;
@@ -152,7 +161,7 @@
       try {
         const url = this.__xbm_url || '';
         if (url.indexOf('/graphql/') !== -1 && this.responseText) {
-          handleJson(url, JSON.parse(this.responseText), this.__xbm_account);
+          handleJson(url, JSON.parse(this.responseText), this.__xbm_account, this.status);
         }
       } catch (e) {}
     });

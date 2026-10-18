@@ -1,35 +1,31 @@
-/* popup.js */
-document.getElementById('sync').addEventListener('click', function () {
-  setStatus('同步中…');
-  chrome.runtime.sendMessage({ type: 'manual-sync' }, function (res) {
-    if (res && res.ok && res.result.noCapture) setStatus('本轮未捕获书签；请查看设置与任务记录中的诊断。');
-    else if (res && res.ok) setStatus((res.result.account ? '@' + res.result.account.slice(2) + ' · ' : '') + '捕获 ' + (res.result.count || 0) + ' 条，' + (res.result.pendingDelivery ? '已本地保存，等待 NAS 恢复' : '已提交 NAS；媒体下载请查看 NAS 状态'));
-    else setStatus('失败：' + ((res && res.error) || '未知错误'));
-  });
-});
-document.getElementById('full').addEventListener('click', function () {
-  if (!confirm('历史回填最多滚动 60 轮，不能保证覆盖全部书签，继续？')) return;
-  setStatus('回填中…');
-  chrome.runtime.sendMessage({ type: 'manual-sync', full: true }, function (res) {
-    if (res && res.ok && res.result.noCapture) setStatus('本轮未捕获书签；请查看设置与任务记录中的诊断。');
-    else if (res && res.ok) setStatus((res.result.account ? '@' + res.result.account.slice(2) + ' · ' : '') + '捕获 ' + (res.result.count || 0) + ' 条，' + (res.result.pendingDelivery ? '已本地保存，等待 NAS 恢复' : '已提交 NAS；媒体下载请查看 NAS 状态'));
-    else setStatus('失败：' + ((res && res.error) || '未知错误'));
-  });
-});
-document.getElementById('options').addEventListener('click', function () {
-  chrome.runtime.openOptionsPage();
-});
-function setStatus(t) { document.getElementById('status').textContent = t; }
-
-async function showPersistentStatus() {
-  const data = await chrome.storage.local.get({ xbm_sync_status: {}, xbm_pending_queue: [] });
-  const labels = { waiting_browser: '等待打开书签页', no_capture: '未捕获数据（未确认成功）', idle: '已提交 NAS', collecting: '正在采集', needs_login: '需要登录 X，自动采集已暂停',
-    pending_delivery: '等待补传至 NAS', error: '上次操作失败' };
-  const status = data.xbm_sync_status;
-  if (status.state) setStatus((status.account ? '@' + status.account.slice(2) + ' · ' : '') + (labels[status.state] || status.state) +
-    '；待传 ' + data.xbm_pending_queue.length + ' 条' + (status.error ? '。' + status.error : ''));
+const $ = id => document.getElementById(id);
+async function start(full) {
+  $('status').textContent = '正在连接已有书签页…';
+  try {
+    const result = await chrome.runtime.sendMessage({type:'manual-sync',full});
+    if (!result || !result.ok) throw new Error(result && result.error || '采集连接中断，请刷新 X 页面');
+    await showPersistentStatus();
+  } catch(e) { $('status').textContent = e.message; }
 }
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && (changes.xbm_sync_status || changes.xbm_pending_queue)) showPersistentStatus();
-});
-showPersistentStatus();
+$('sync').onclick = () => start(false);
+$('full').onclick = () => start(true);
+$('stop').onclick = async () => { await chrome.runtime.sendMessage({type:'stop-sync'}); $('status').textContent='正在停止，已捕获内容继续补传…'; };
+$('options').onclick = () => chrome.runtime.openOptionsPage();
+$('nas').onclick = async () => {
+  const {serverUrl} = await chrome.storage.sync.get({serverUrl:''});
+  try { const url = new URL(serverUrl); if (!['http:','https:'].includes(url.protocol)) throw new Error(); chrome.tabs.create({url:url.origin}); }
+  catch (_) { chrome.runtime.openOptionsPage(); }
+};
+async function showPersistentStatus() {
+  const d = await chrome.storage.local.get({xbm_sync_status:{},xbm_pending_queue:[],xbm_collect_progress:{}});
+  const s=d.xbm_sync_status,p=d.xbm_collect_progress;
+  const active = s.state === 'collecting' && Date.now()-(p.updatedAt || s.updatedAt || 0)<45000;
+  $('sync').disabled=active; $('full').disabled=active; $('stop').hidden=!active;
+  $('progress').hidden=!active;
+  if(active) $('progress').textContent=`页面已捕获 ${p.count || 0} 条 · 自动滚动 ${p.scrolls || 0} 轮\n${p.phase==='waiting'?'等待 X 加载更多…':'正在自动采集…'} · 已运行 ${Math.floor((Date.now()-(p.startedAt || Date.now()))/1000)} 秒`;
+  const labels={collecting:active?'采集中':'采集长时间无响应，请检查 X 页面后重试',idle:'已提交 NAS',pending_delivery:'等待补传',no_capture:'未捕获书签，请刷新 X 书签页',needs_login:'请先登录 X',error:'操作失败',waiting_browser:'请先打开 X 书签页'};
+  const reasons={end:'X 已返回列表结束信号',stalled:'持续无新增，已停止；可能尚未采集完整，可稍后继续',limit:'达到本轮上限，可继续采集',stopped:'已停止采集，已捕获内容保留'};
+  $('status').textContent=[s.account?'@'+s.account.slice(2):'',labels[s.state] || '等待首次同步',`待传 NAS：${d.xbm_pending_queue.length} 条`,s.count!==undefined?`页面捕获：${s.count} 条`:'',reasons[s.reason] || '',s.error || ''].filter(Boolean).join('\n');
+}
+chrome.storage.onChanged.addListener((changes,area)=>{if(area==='local')showPersistentStatus();});
+setInterval(showPersistentStatus,1000);showPersistentStatus();

@@ -84,6 +84,8 @@ class Store:
             # tweets.url 列也是 M2 新增的
             cols = {r["name"] for r in
                     self._conn.execute("PRAGMA table_info(tweets)").fetchall()}
+            if "deleted_at" not in cols:
+                self._conn.execute("ALTER TABLE tweets ADD COLUMN deleted_at REAL DEFAULT 0")
             if "url" not in cols:
                 self._conn.execute("ALTER TABLE tweets ADD COLUMN url TEXT DEFAULT ''")
             cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(sync_runs)")}
@@ -202,6 +204,7 @@ class Store:
             row = self._conn.execute(
                 """SELECT * FROM media_files
                    WHERE status IN ('pending', 'failed') AND retries<? AND next_retry_at<=?
+                   AND NOT EXISTS (SELECT 1 FROM tweets t WHERE t.tweet_id=media_files.tweet_id AND t.deleted_at>0)
                    ORDER BY created_at ASC LIMIT 1""",
                 (max_retries, now),
             ).fetchone()
@@ -263,7 +266,7 @@ class Store:
     def media_stats(self) -> dict[str, int]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT status, COUNT(*) AS n FROM media_files GROUP BY status"
+                "SELECT status, COUNT(*) AS n FROM media_files WHERE NOT EXISTS (SELECT 1 FROM tweets hidden WHERE hidden.tweet_id=media_files.tweet_id AND hidden.deleted_at>0) GROUP BY status"
             ).fetchall()
         stats = {"pending": 0, "downloading": 0, "done": 0, "failed": 0}
         for r in rows:
@@ -280,7 +283,7 @@ class Store:
 
     def count_tweets(self) -> int:
         with self._lock:
-            row = self._conn.execute("SELECT COUNT(*) AS n FROM tweets").fetchone()
+            row = self._conn.execute("SELECT COUNT(*) AS n FROM tweets WHERE deleted_at=0").fetchone()
         return row["n"]
 
     def start_run(self) -> int:
@@ -322,8 +325,15 @@ class Store:
                                   WHERE id=? AND status='downloading'""",
                                (received, total, speed, time.time(), media_id))
 
-    def list_bookmarks(self, query: str = "", kind: str = "", limit: int = 24, offset: int = 0) -> dict:
-        where, args = [], []
+    def list_bookmarks(self, query: str = "", kind: str = "", limit: int = 24, offset: int = 0, status: str = "", trash: bool = False) -> dict:
+        where, args = ["t.deleted_at>0" if trash else "t.deleted_at=0"], []
+        if status == 'done':
+            where.append("EXISTS (SELECT 1 FROM media_files m WHERE m.tweet_id=t.tweet_id) AND NOT EXISTS (SELECT 1 FROM media_files m WHERE m.tweet_id=t.tweet_id AND m.status!='done')")
+        elif status == 'incomplete':
+            where.append("EXISTS (SELECT 1 FROM media_files m WHERE m.tweet_id=t.tweet_id AND m.status!='done')")
+        elif status:
+            where.append("EXISTS (SELECT 1 FROM media_files m WHERE m.tweet_id=t.tweet_id AND m.status=?)")
+            args.append(status)
         if query:
             where.append("(t.text LIKE ? ESCAPE '\\' OR t.author LIKE ? ESCAPE '\\' OR t.screen_name LIKE ? ESCAPE '\\')")
             escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -348,6 +358,19 @@ class Store:
                 items.append(item)
         return {"items": items, "total": total, "limit": limit, "offset": offset}
 
+    def set_deleted(self, ids: list[str], restore: bool = False) -> int:
+        if not isinstance(ids, list) or not 1 <= len(ids) <= 100 or any(
+                not isinstance(tid, str) or not tid.isascii() or not tid.isdigit() for tid in ids):
+            raise ValueError('请选择 1–100 条有效书签')
+        marks = ','.join('?' for _ in ids)
+        with self._lock, self._conn:
+            if not restore and self._conn.execute(
+                    f"SELECT 1 FROM media_files WHERE tweet_id IN ({marks}) AND status='downloading'", ids).fetchone():
+                raise ValueError('选中书签仍有媒体正在下载，请下载结束后再删除')
+            cur = self._conn.execute(f"UPDATE tweets SET deleted_at=? WHERE tweet_id IN ({marks})",
+                                     [0 if restore else time.time(), *ids])
+            return cur.rowcount
+
     def list_runs(self, limit: int = 24, offset: int = 0) -> dict:
         with self._lock:
             total = self._conn.execute("SELECT COUNT(*) FROM sync_runs").fetchone()[0]
@@ -356,7 +379,7 @@ class Store:
         return {"items": items, "total": total, "limit": limit, "offset": offset}
 
     def list_downloads(self, status: str = "", limit: int = 24, offset: int = 0) -> dict:
-        clause = " WHERE m.status=?" if status else ""
+        clause = " WHERE NOT EXISTS (SELECT 1 FROM tweets hidden WHERE hidden.tweet_id=m.tweet_id AND hidden.deleted_at>0)" + (" AND m.status=?" if status else "")
         args = [status] if status else []
         with self._lock:
             total = self._conn.execute("SELECT COUNT(*) FROM media_files m" + clause, args).fetchone()[0]
@@ -371,7 +394,7 @@ class Store:
     def retry_media(self, media_id: int) -> bool:
         with self._lock, self._conn:
             cur = self._conn.execute("""UPDATE media_files SET status='pending', retries=0,
-                error='',next_retry_at=0,speed=0 WHERE id=? AND status IN ('pending','failed')""", (media_id,))
+                error='',next_retry_at=0,speed=0 WHERE id=? AND NOT EXISTS (SELECT 1 FROM tweets hidden WHERE hidden.tweet_id=media_files.tweet_id AND hidden.deleted_at>0) AND status IN ('pending','failed')""", (media_id,))
         return cur.rowcount > 0
 
     def get_media(self, media_id: int) -> dict | None:

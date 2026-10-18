@@ -41,7 +41,11 @@ def get(handler) -> bool:
                 kind = query.get('kind', [''])[0]
                 if kind not in {'', 'photo', 'video', 'gif', 'hls', 'text'}:
                     raise ValueError('invalid media kind')
-                result = handler.store.list_bookmarks(query.get('q', [''])[0][:300], kind, limit, offset)
+                status = query.get('status', [''])[0]
+                if status not in {'', 'done', 'incomplete', 'failed', 'pending', 'downloading'}:
+                    raise ValueError('invalid bookmark download status')
+                result = handler.store.list_bookmarks(query.get('q', [''])[0][:300], kind, limit, offset,
+                                                     status, query.get('trash', ['0'])[0] == '1')
             elif path == '/api/runs':
                 result = handler.store.list_runs(limit, offset)
             else:
@@ -121,6 +125,24 @@ def serve_media(handler, media_id: int) -> None:
 
 
 def post(handler) -> bool:
+    path = urlsplit(handler.path).path
+    if path in {'/api/bookmarks/delete', '/api/bookmarks/restore'}:
+        import json
+        if not same_origin(handler, 'bookmarks'):
+            handler._json(403, {'ok': False, 'error': 'same-origin dashboard required'})
+            return True
+        try:
+            length = int(handler.headers.get('Content-Length', 0))
+            if not 0 < length <= 8192:
+                raise ValueError('invalid request body')
+            data = json.loads(handler.rfile.read(length))
+            if not isinstance(data, dict):
+                raise ValueError('invalid request body')
+            changed = handler.store.set_deleted(data.get('ids'), path.endswith('/restore'))
+            handler._json(200, {'ok': True, 'changed': changed})
+        except (ValueError, TypeError) as error:
+            handler._json(400, {'ok': False, 'error': str(error)})
+        return True
     match = re.fullmatch(r'/api/downloads/(\d+)/retry', urlsplit(handler.path).path)
     if not match:
         return False

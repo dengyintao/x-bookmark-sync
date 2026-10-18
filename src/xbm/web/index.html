@@ -79,6 +79,13 @@
             <option value="">全部类型</option></select
           ><span id="total"></span>
         </div>
+        <div id="library-tools" class="tools">
+          <select id="download-filter" aria-label="书签下载状态"><option value="">全部下载状态</option><option value="done">媒体全部已下载</option><option value="incomplete">媒体未完成</option><option value="failed">含失败媒体</option><option value="downloading">正在下载</option><option value="pending">等待下载</option></select>
+          <select id="layout" aria-label="展示形式"><option value="cards">卡片</option><option value="list">紧凑列表</option><option value="preview">媒体预览</option></select>
+          <select id="trash" aria-label="书签范围"><option value="0">书签库</option><option value="1">回收站</option></select>
+          <button id="select-page" class="outline">选择本页</button><button id="delete-selected" class="outline" disabled>删除所选</button>
+          <span id="selection-count"></span>
+        </div>
         <p id="view-note" class="view-note"></p>
         <div id="content" aria-live="polite"></div>
         <footer class="pagination">

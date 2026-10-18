@@ -54,6 +54,8 @@ let view = "bookmarks",
 const limit = 24;
 let selectedAccount = localStorage.getItem("xbm-account") || "";
 let accountsSignature = "";
+const selectedIds = new Set();
+let layout = localStorage.getItem("xbm-layout") || "cards";
 function accountUrl(path) {
   const url = new URL(path, location.origin);
   url.searchParams.set("account", selectedAccount);
@@ -162,9 +164,25 @@ function original(item) {
   return a;
 }
 function bookmarks() {
-  const grid = el("div", undefined, "grid");
+  const grid = el("div", undefined, "grid layout-" + layout);
+  const renderedAccount = selectedAccount;
   for (const item of items) {
     const card = el("article", undefined, "card");
+    const check = el('input'); check.type = 'checkbox'; check.checked = selectedIds.has(item.tweet_id);
+    check.setAttribute('aria-label', '选择书签 ' + item.tweet_id);
+    check.addEventListener('change', () => { check.checked ? selectedIds.add(item.tweet_id) : selectedIds.delete(item.tweet_id); selectionStatus(); });
+    card.append(check);
+    if (layout === 'preview') {
+      const cover = (item.media || []).find(m => m.status === 'done');
+      if (cover) {
+        const preview = el(cover.kind === 'photo' ? 'img' : 'video');
+        preview.src = accountUrl('/api/media/' + cover.id);
+        preview.className = 'cover';
+        if (cover.kind === 'photo') { preview.alt = '书签预览'; preview.loading = 'lazy'; }
+        else { preview.controls = true; preview.preload = 'none'; }
+        card.append(preview);
+      }
+    }
     card.append(
       author(item),
       el("p", item.text || "这条书签没有正文。", "text"),
@@ -186,6 +204,9 @@ function bookmarks() {
     const button = el("button", "查看详情 →");
     button.addEventListener("click", () => detail(item));
     card.append(button);
+    const remove = el('button', $('trash').value === '1' ? '恢复书签' : '删除', 'outline');
+    remove.addEventListener('click', () => changeBookmarks([item.tweet_id], renderedAccount));
+    card.append(remove);
     grid.append(card);
   }
   return grid;
@@ -397,11 +418,14 @@ async function load() {
   if (view === "bookmarks") {
     params.set("q", $("search").value);
     params.set("kind", $("filter").value);
+    params.set("status", $("download-filter").value);
+    params.set("trash", $("trash").value);
   }
   if (view === "downloads") params.set("status", $("filter").value);
   try {
     const data = await api(`/api/${view}?${params}`);
     if (token !== generation) return;
+    selectedIds.clear(); selectionStatus();
     items = data.items;
     total = data.total;
     if (offset && offset >= total) {
@@ -419,6 +443,7 @@ async function load() {
   }
 }
 function navigate() {
+  selectedIds.clear(); selectionStatus();
   $("content").replaceChildren(el("div", "正在加载…", "empty"));
   view = location.hash.slice(1);
   if (!views[view]) view = "bookmarks";
@@ -434,6 +459,7 @@ function navigate() {
     else a.removeAttribute("aria-current");
   });
   $("search-form").hidden = view !== "bookmarks";
+  $("library-tools").hidden = view !== "bookmarks";
   $("filter").hidden = !config.filters.length;
   $("filter").replaceChildren(
     ...config.filters.map(([v, t]) => {
@@ -445,6 +471,26 @@ function navigate() {
   notice();
   load();
 }
+function selectionStatus() {
+  $('selection-count').textContent = selectedIds.size ? `已选 ${selectedIds.size} 条` : '';
+  $('delete-selected').disabled = !selectedIds.size;
+  $('delete-selected').textContent = $('trash').value === '1' ? '恢复所选' : '删除所选';
+}
+async function changeBookmarks(ids, account = selectedAccount) {
+  if(account !== selectedAccount || loading) return;
+  const restore = $('trash').value === '1';
+  if (!confirm(restore ? `恢复 ${ids.length} 条书签？` : `将 ${ids.length} 条书签移入回收站？本地文件保留，可恢复；不影响 X 上的收藏。`)) return;
+  try {
+    await api('/api/bookmarks/' + (restore ? 'restore' : 'delete'), {method:'POST', headers:{'Content-Type':'application/json','X-XBM-Action':'bookmarks'}, body:JSON.stringify({ids})});
+    notice(restore ? '已恢复书签。' : '已移入回收站；保留本地文件，不会因再次同步自动恢复。');
+    await load(); await status();
+  } catch (error) { notice(error.message); }
+}
+$('layout').value = layout;
+$('layout').addEventListener('change', () => {layout = $('layout').value; localStorage.setItem('xbm-layout',layout);render();});
+for (const id of ['download-filter','trash']) $(id).addEventListener('change', () => {offset=0;load();});
+$('select-page').addEventListener('click', () => { if(selectedIds.size === items.length) selectedIds.clear(); else items.forEach(i => selectedIds.add(i.tweet_id));selectionStatus();render(); });
+$('delete-selected').addEventListener('click', () => changeBookmarks([...selectedIds]));
 $("search-form").addEventListener("submit", (e) => {
   e.preventDefault();
   offset = 0;

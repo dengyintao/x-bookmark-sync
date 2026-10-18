@@ -628,3 +628,5 @@ header {
 header > div {
   margin-right: auto;
 }
+
+[hidden]{display:none!important}.layout-list{grid-template-columns:1fr}.layout-list .card .text{max-height:4.5em}.cover{width:100%;height:220px;object-fit:contain;background:#eef1f3;border-radius:10px}.card>input[type=checkbox]{width:18px;height:18px;align-self:start}.card>button{margin-top:8px}.tools{flex-wrap:wrap;gap:10px}#selection-count{font-size:13px;color:#667085}

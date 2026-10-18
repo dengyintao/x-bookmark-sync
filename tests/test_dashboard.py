@@ -119,6 +119,34 @@ class DashboardTest(unittest.TestCase):
             urlopen(self.base + '/../../config.toml')
 
 
+    def test_delete_restore_filter_and_resync_do_not_resurrect(self):
+        def mutate(action, ids, headers=None):
+            req = Request(self.base+'/api/bookmarks/'+action, method='POST',
+                          data=json.dumps({'ids':ids}).encode(), headers=headers or {'X-XBM-Action':'bookmarks','Content-Type':'application/json'})
+            with urlopen(req) as response: return json.load(response)
+        self.assertEqual(self.get('/api/bookmarks?status=incomplete')['total'],1)
+        self.assertEqual(self.get('/api/bookmarks?status=done')['total'],0)
+        with self.assertRaises(HTTPError) as denied:
+            mutate('delete',['100'],{'Origin':'https://evil.invalid','X-XBM-Action':'bookmarks'})
+        self.assertEqual(denied.exception.code,403)
+        mutate('delete',['100'])
+        self.assertEqual(self.get('/api/bookmarks')['total'],1)
+        self.assertEqual(self.get('/api/bookmarks?trash=1')['items'][0]['tweet_id'],'100')
+        self.assertIsNone(self.store.claim_media(5))
+        self.assertEqual(self.get('/api/downloads')['total'],0)
+        ingest_payload({'tweets':[{'tweet_id':'100'}]},self.store)
+        self.assertEqual(self.get('/api/bookmarks')['total'],1)
+        mutate('restore',['100'])
+        job=self.store.claim_media(5)
+        with self.assertRaises(HTTPError): mutate('delete',['100','200'])
+        self.assertEqual(self.get('/api/bookmarks')['total'],2)
+        self.store.mark_done(job['id'],'unused',10)
+        self.assertEqual(self.get('/api/bookmarks?status=done')['total'],1)
+        self.assertEqual(self.get('/api/bookmarks?status=incomplete')['total'],0)
+        with self.assertRaises(HTTPError): mutate('delete',[])
+        with self.assertRaises(HTTPError): self.get('/api/bookmarks?status=invalid')
+
+
 class MigrationTest(unittest.TestCase):
     def test_old_database_remains_readable_and_history_is_not_invented(self):
         with TemporaryDirectory() as tmp:
