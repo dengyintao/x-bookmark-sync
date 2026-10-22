@@ -458,7 +458,7 @@ async function load() {
 function navigate() {
   selectedIds.clear(); selectionStatus();
   $("content").replaceChildren(el("div", "正在加载…", "empty"));
-  view = location.hash.slice(1);
+  view = location.hash.slice(1).split('?')[0];
   if (!views[view]) view = "bookmarks";
   generation++;
   offset = 0;
@@ -818,7 +818,7 @@ async function unlockDashboard() {
   authenticated = true; authGeneration++;
   $("admin-key").value = ""; $("login-message").textContent = "";
   $("login-dialog").close(); document.body.classList.remove("locked");
-  try { await refreshAccounts(); navigate(); await status(); }
+  try { await refreshAccounts(); navigate(); await status(); await showConnectionRequest(); }
   catch (error) { notice(error.message); }
 }
 async function accessRequest(path, data) {
@@ -837,6 +837,10 @@ async function bootstrapAccess() {
     const response = await fetch("/api/access/status", {cache:"no-store", signal:AbortSignal.timeout(10000)});
     const data = await response.json();
     if (data.authenticated && data.role === "admin") return unlockDashboard();
+    if (data.quick_access) {
+      await accessRequest("/api/access/local", {});
+      return unlockDashboard();
+    }
     lockDashboard();
   } catch (_) { lockDashboard(); $("login-message").textContent = "无法连接服务，请检查 NAS 后刷新页面。"; }
 }
@@ -866,7 +870,7 @@ async function refreshClients() {
     }
   } catch (error) { $("paired-clients").textContent = error.message; }
 }
-$("access-open").onclick = () => { $("pair-server").textContent = location.origin; $("pair-result").textContent = ""; $("access-dialog").showModal(); refreshClients(); };
+$("access-open").onclick = () => { $("pair-server").textContent = location.origin; $("pair-result").textContent = ""; $("access-dialog").showModal(); refreshClients(); loadSecurity(); };
 $("access-close").onclick = () => { $("pair-result").textContent = ""; $("access-dialog").close(); };
 $("access-refresh").onclick = refreshClients;
 $("pair-create").onclick = async () => {
@@ -927,3 +931,42 @@ $('confirm-yes').onclick = () => resolveConfirmation(true);
 $('confirm-no').onclick = () => resolveConfirmation(false);
 $('confirm-dialog').addEventListener('cancel', event => {event.preventDefault();resolveConfirmation(false);});
 $('confirm-dialog').addEventListener('close', () => {if(confirmationResolve) resolveConfirmation(false);});
+
+const connectionRequestId = new URLSearchParams(location.hash.split('?')[1] || '').get('connect');
+async function showConnectionRequest() {
+  if (!connectionRequestId) return;
+  try {
+    const request = await api('/api/access/request?id=' + encodeURIComponent(connectionRequestId));
+    $('connect-name').textContent = request.name;
+    $('connect-message').textContent = '';
+    $('connect-dialog').showModal();
+  } catch (error) { notice(error.message); }
+}
+$('connect-approve').onclick = async () => {
+  $('connect-approve').disabled = true;
+  try {
+    await accessRequest('/api/access/approve', {id:connectionRequestId});
+    $('connect-dialog').close();
+    history.replaceState(null, '', '#runs');
+    notice('已允许同步。返回扩展即可开始采集，无需复制配对码。');
+  } catch (error) { $('connect-message').textContent = error.message; }
+  finally { $('connect-approve').disabled = false; }
+};
+$('connect-cancel').onclick = () => { $('connect-dialog').close(); history.replaceState(null, '', '#runs'); };
+async function loadSecurity() {
+  try {
+    const result = await api('/api/access/security');
+    $('require-login').checked = result.require_login;
+    $('new-owner-password').value = '';
+    $('security-message').textContent = result.require_login ? '当前：管理页面需要登录' : '当前：可信局域网免登录';
+  } catch (error) { $('security-message').textContent = error.message; }
+}
+$('security-form').onsubmit = async event => {
+  event.preventDefault();
+  try {
+    await accessRequest('/api/access/security', {require_login:$('require-login').checked, password:$('new-owner-password').value});
+    if ($('require-login').checked) { lockDashboard(); return; }
+    await loadSecurity();
+  } catch (error) { $('security-message').textContent = error.message; }
+  finally { $('new-owner-password').value = ''; }
+};

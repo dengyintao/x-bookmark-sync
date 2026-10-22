@@ -40,3 +40,33 @@ async function nasRequest(server, path, options = {}, authenticated = true) {
 }
 // Content scripts do not need storage access. Never expose pairing tokens to X pages.
 if (chrome.storage.local.setAccessLevel) chrome.storage.local.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'}).catch(console.warn);
+
+async function saveNasConnection(origin, result) {
+  if (!result.ok || typeof result.token !== 'string' || !result.token || !Number.isFinite(result.expires))
+    throw new Error('连接未完成，请重新连接 NAS');
+  const data = await chrome.storage.local.get({xbm_connections:{},xbm_legacy_origins:{}});
+  data.xbm_connections[origin] = {token:result.token, id:result.id, expires:result.expires};
+  delete data.xbm_legacy_origins[origin];
+  await chrome.storage.local.set({xbm_connections:data.xbm_connections,xbm_legacy_origins:data.xbm_legacy_origins});
+  await chrome.storage.sync.set({serverUrl:origin});
+}
+async function beginNasConnection(origin, name) {
+  const health = await nasRequest(origin, '/api/health', {}, false);
+  const info = await health.json();
+  if (!health.ok || info.service !== 'xbm' || info.protocol_version !== 1 || !info.connection_approval)
+    throw new Error('此 NAS 尚不支持一键连接，请升级服务或展开备用配对码');
+  const response = await nasRequest(origin, '/api/access/connect', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})}, false);
+  const request = await response.json();
+  if (!response.ok || !request.ok || !/^[a-f0-9]{32}$/.test(request.id) || typeof request.secret !== 'string' || !Number.isFinite(request.expires_in) || request.expires_in <= 0 || request.expires_in > 300)
+    throw new Error(request.error || '无法发起连接，请重试');
+  return request;
+}
+async function claimNasConnection(origin, request) {
+  const response = await nasRequest(origin, '/api/access/claim', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify({id:request.id,secret:request.secret})}, false);
+  const result = await response.json();
+  if (!response.ok || !result.ok) throw new Error(result.error || '连接确认失败，请重试');
+  if (!result.pending) await saveNasConnection(origin, result);
+  return !result.pending;
+}

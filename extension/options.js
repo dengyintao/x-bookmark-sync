@@ -78,15 +78,42 @@ document.getElementById('pair').addEventListener('click', async () => {
     const result = await response.json();
     if (!response.ok || !result.ok || typeof result.token !== 'string' || !result.token || !Number.isFinite(result.expires))
       throw new Error(result.error || '配对失败，请重新生成配对码');
-    const data = await chrome.storage.local.get({xbm_connections:{}});
-    data.xbm_connections[origin] = {token:result.token, id:result.id, expires:result.expires};
-    const legacy = await chrome.storage.local.get({xbm_legacy_origins:{}});
-    delete legacy.xbm_legacy_origins[origin];
-    await chrome.storage.local.set({xbm_connections:data.xbm_connections,xbm_legacy_origins:legacy.xbm_legacy_origins});
-    await chrome.storage.sync.set({serverUrl:origin});
+    await saveNasConnection(origin, result);
     document.getElementById('pairCode').value = '';
     chrome.runtime.sendMessage({type:'retry-delivery'}).catch(console.warn);
     setMsg('配对成功。现在打开 X 书签页，在扩展弹窗点击“自动采集历史书签”。已有待传内容会自动补传。');
   } catch (error) { setMsg(error.message); }
   finally { button.disabled = false; }
 });
+
+let connectGeneration = 0;
+function finishConnection() {
+  chrome.runtime.sendMessage({type:'retry-delivery'}).catch(console.warn);
+  setMsg('连接成功。打开 X 书签页，在扩展弹窗开始自动采集。待传内容会自动补传。');
+}
+document.getElementById('cancelConnect').onclick = () => { connectGeneration++; setMsg('已取消等待，可随时重新连接；待传内容已保留。'); };
+document.getElementById('connect').onclick = async () => {
+  const generation = ++connectGeneration;
+  const button = document.getElementById('connect');
+  const cancel = document.getElementById('cancelConnect');
+  button.disabled = true; cancel.hidden = false;
+  try {
+    const origin = nasOrigin(document.getElementById('serverUrl').value.trim());
+    await allowServer(origin);
+    // Existing credentials survive upgrades. Connecting again does not mint another token.
+    try {
+      const current = await nasRequest(origin, '/api/client/status');
+      if (current.ok && (await current.json()).ok) { finishConnection(); return; }
+    } catch (_) { /* A new/revoked/expired connection needs the owner's confirmation. */ }
+    const request = await beginNasConnection(origin, document.getElementById('clientName').value.trim());
+    await chrome.tabs.create({url:origin + '/#runs?connect=' + encodeURIComponent(request.id)});
+    setMsg('请在 NAS 页面点击“允许同步”。确认后自动完成连接，无需复制配对码；本页请保持打开。');
+    const deadline = Date.now() + request.expires_in * 1000;
+    while (generation === connectGeneration && Date.now() < deadline) {
+      if (await claimNasConnection(origin, request)) { finishConnection(); return; }
+      await new Promise(resolve => setTimeout(resolve, 1500));
+    }
+    if (generation === connectGeneration) setMsg('等待确认已超时，点击“连接 NAS”即可重试；待传内容已保留。');
+  } catch (error) { if (generation === connectGeneration) setMsg(error.message); }
+  finally { button.disabled = false; cancel.hidden = true; }
+};

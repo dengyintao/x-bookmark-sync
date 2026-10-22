@@ -41,7 +41,7 @@
           <h1 id="title">全部书签</h1>
           <p id="subtitle">值得保存的内容，随时回看。</p>
         </div>
-        <button id="access-open" class="outline">连接与配对</button>
+        <button id="access-open" class="outline">浏览器连接</button>
         <button id="storage-open" class="outline">存储管理</button>
         <button id="diagnostics-open" class="outline">连接诊断</button>
         <button id="ownership-open" class="outline">旧数据归属</button
@@ -141,7 +141,7 @@
     </dialog>
     <dialog id="login-dialog" aria-labelledby="login-title">
       <h2 id="login-title">连接你的书签库</h2>
-      <p>请输入安装时设置的管理密码。登录凭据不会保存在浏览器本地存储中。</p>
+      <p>远程访问或已开启密码保护，请输入管理密码或恢复密钥。登录凭据不会保存在浏览器本地存储中。</p>
       <form id="login-form">
         <label for="admin-key">管理密码或管理密钥</label>
         <input id="admin-key" type="password" autocomplete="off" required maxlength="256">
@@ -155,17 +155,27 @@
       </details>
     </dialog>
     <dialog id="access-dialog" aria-labelledby="access-title">
-      <h2 id="access-title">连接与配对</h2>
-      <ol><li>安装浏览器扩展，并打开扩展设置。</li><li>填写下方 NAS 地址及一次性配对码。</li><li>配对成功后登录 X，打开书签页，在扩展弹窗启动自动采集。</li></ol>
+      <h2 id="access-title">浏览器连接</h2>
+      <p>在扩展设置填写 NAS 地址，点击“连接 NAS”，再在本页确认一次即可。已有连接在升级后继续有效。</p>
       <p>NAS 地址：<code id="pair-server"></code></p>
-      <button id="pair-create">生成配对码</button>
+      <details><summary>备用：使用配对码连接</summary><button id="pair-create">生成配对码</button></details>
       <p id="pair-result" role="status"></p>
       <p class="view-note">配对码 5 分钟有效且只能使用一次，新码会使旧码失效。扩展只能提交书签和读取同步状态，不能删除或迁移数据。请在可信局域网或 HTTPS 连接上配对。</p>
-      <h3>已配对浏览器</h3><div id="paired-clients"></div>
+      <details><summary>高级安全设置</summary>
+        <p>默认仅在可信局域网使用 IP 地址打开时免登录；远程访问仍需管理密码或恢复密钥。启用下方选项后，局域网也需要登录。</p>
+        <form id="security-form"><label><input id="require-login" type="checkbox">局域网也要求登录</label>
+        <label for="new-owner-password">首次启用时设置管理密码（至少 12 个字符，已有密码时留空）</label>
+        <input id="new-owner-password" type="password" autocomplete="new-password" maxlength="256">
+        <button type="submit">保存安全设置</button></form><p id="security-message" role="status"></p>
+      </details><h3>已连接浏览器</h3><div id="paired-clients"></div>
       <button id="access-refresh" class="outline">刷新连接列表</button>
       <button id="access-close" class="outline">关闭</button>
       <button id="logout" class="outline">退出管理页面</button>
     </dialog>
+    <dialog id="connect-dialog"><h2>允许此浏览器同步？</h2>
+      <p id="connect-name"></p><p>此浏览器只能提交书签和查看同步统计，不能读取书签正文、删除或管理数据。仅确认你刚刚在扩展中发起的请求。</p>
+      <button id="connect-approve">允许同步</button><button id="connect-cancel" class="outline">暂不连接</button>
+      <p id="connect-message" role="status"></p></dialog>
     <dialog id="storage-dialog"><h2>存储管理</h2>
       <div id="storage-result" role="status"></div>
       <form id="storage-policy-form">

@@ -10,14 +10,16 @@ button.ghost{background:#fff;color:#333;margin-left:8px}
 </style></head>
 <body>
 <h2>连接你的 NAS</h2>
-<p>① 在 NAS 管理页登录并打开“连接与配对”，生成一次性配对码。<br>② 填写地址和配对码，连接成功后打开 X 书签页。<br>③ 在扩展弹窗开始自动采集，无需手动下拉。</p>
-<p>使用可信局域网或 HTTPS 地址。配对凭据只保存在当前浏览器，不通过 Chrome 账户同步。</p>
+<p>① 填写 NAS 地址，点击“连接 NAS”。<br>② 在打开的 NAS 页面点击“允许同步”，返回此页即可。<br>③ 打开 X 书签页，在扩展弹窗开始自动采集，无需手动下拉。</p>
+<p>已连接的浏览器升级后自动沿用。连接凭据在后台维护，只保存在当前浏览器。</p>
 <label>服务端地址（NAS 上 xbm serve 的地址）</label>
 <input id="serverUrl" placeholder="http://192.168.1.10:8765">
-<label for="pairCode">一次性配对码（5 分钟有效）</label>
-<input id="pairCode" type="password" autocomplete="off" placeholder="从 NAS 管理页复制，不要填管理员密钥">
 <label for="clientName">此浏览器的名称</label><input id="clientName" maxlength="80" value="我的 Chrome">
-<button id="pair">配对 NAS</button>
+<button id="connect">连接 NAS</button><button id="cancelConnect" class="ghost" hidden>取消等待</button>
+<details><summary>高级：备用配对码</summary>
+<label for="pairCode">一次性配对码（5 分钟有效）</label>
+<input id="pairCode" type="password" autocomplete="off" placeholder="从 NAS 管理页的浏览器连接中生成">
+<button id="pair">使用配对码连接</button></details>
 <label>自动采集间隔（分钟）</label>
 <input id="intervalMinutes" type="number" min="15" value="60">
 <div>

@@ -101,6 +101,30 @@ class Handler(BaseHTTPRequestHandler):
         self._cors()
         self.end_headers()
 
+    def _session_cookie(self, result):
+        self.response_cookie = 'xbm_session=' + result['token'] + '; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000' + ('; Secure' if urlsplit(self.headers.get('Origin', '')).scheme == 'https' else '')
+
+    def _local_dashboard(self):
+        # Do not trust forwarded headers or DNS names for passwordless administration.
+        # Requiring a private IP literal also prevents DNS rebinding from a public site.
+        import ipaddress
+        try:
+            peer = ipaddress.ip_address(self.client_address[0])
+            host = ipaddress.ip_address(urlsplit('//' + self.headers.get('Host', '')).hostname)
+            def trusted(ip):
+                return ip.is_loopback or any(ip in network for network in (
+                    ipaddress.ip_network('10.0.0.0/8'), ipaddress.ip_network('172.16.0.0/12'),
+                    ipaddress.ip_network('192.168.0.0/16'), ipaddress.ip_network('fc00::/7'))
+                    if ip.version == network.version)
+            origin = self.headers.get('Origin')
+            if origin:
+                origin_ip = ipaddress.ip_address(urlsplit(origin).hostname)
+                if not trusted(origin_ip):
+                    return False
+            return trusted(peer) and trusted(host)
+        except (ValueError, TypeError):
+            return False
+
     def _access_gate(self):
         from http.cookies import SimpleCookie, CookieError
         from . import web
@@ -116,7 +140,7 @@ class Handler(BaseHTTPRequestHandler):
             return False
         if method == 'GET' and path == '/api/health':
             self._json(200, {'ok': True, 'service': 'xbm', 'version': __version__,
-                             'protocol_version': 1, 'pairing_required': self.access is not None})
+                             'protocol_version': 1, 'connection_approval': True, 'pairing_required': self.access is not None})
             return False
         if self.access is None:  # Explicit test harness only; production always creates Access.
             return True
@@ -133,7 +157,30 @@ class Handler(BaseHTTPRequestHandler):
         principal = self.access.authenticate(token)
         if method == 'GET' and path == '/api/access/status':
             self._json(200, {'ok': True, 'authenticated': bool(principal),
-                             'role': principal['role'] if principal else None})
+                             'role': principal['role'] if principal else None,
+                             'quick_access': self._local_dashboard() and not self.access.security()['require_login']})
+            return False
+        if method == 'POST' and path in {'/api/access/connect', '/api/access/claim', '/api/access/local'}:
+            try:
+                if path.endswith('/local'):
+                    if not self._local_dashboard() or self.access.security()['require_login'] or not web.same_origin(self, 'access'):
+                        self._json(403, {'ok': False, 'error': '请登录管理页面'})
+                        return False
+                    self._access_body()
+                    result = self.access.local_session()
+                    self._session_cookie(result)
+                    self._json(200, {'ok': True})
+                else:
+                    data = self._access_body()
+                    if path.endswith('/connect'):
+                        result = self.access.request_connection(data.get('name'), self.client_address[0])
+                    else:
+                        result = self.access.claim_connection(data.get('id'), data.get('secret'))
+                    self._json(200, {'ok': True, **result})
+            except PermissionError as error:
+                self._json(429, {'ok': False, 'error': str(error)})
+            except (ValueError, TypeError) as error:
+                self._json(400, {'ok': False, 'error': str(error)})
             return False
         if method == 'POST' and path in {'/api/access/login', '/api/access/pair'}:
             if path.endswith('/login') and not web.same_origin(self, 'access'):
@@ -143,7 +190,7 @@ class Handler(BaseHTTPRequestHandler):
                 data = self._access_body()
                 if path.endswith('/login'):
                     result = self.access.login(data.get('key'), self.client_address[0])
-                    self.response_cookie = 'xbm_session=' + result['token'] + '; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000' + ('; Secure' if urlsplit(self.headers.get('Origin', '')).scheme == 'https' else '')
+                    self._session_cookie(result)
                     self._json(200, {'ok': True})
                 else:
                     result = self.access.pair(data.get('code'), data.get('name', ''), self.client_address[0])
@@ -165,11 +212,22 @@ class Handler(BaseHTTPRequestHandler):
                 return False
         if path.startswith('/api/access/'):
             try:
-                if method == 'GET' and path == '/api/access/clients':
+                if method == 'GET' and path == '/api/access/security':
+                    self._json(200, {'ok': True, **self.access.security()})
+                elif method == 'GET' and path == '/api/access/request':
+                    request_id = parse_qs(urlsplit(self.path).query).get('id', [''])[0]
+                    self._json(200, {'ok': True, **self.access.connection_request(request_id)})
+                elif method == 'GET' and path == '/api/access/clients':
                     self._json(200, {'ok': True, 'items': self.access.clients()})
                 elif method == 'POST' and web.same_origin(self, 'access'):
                     data = self._access_body()
-                    if path == '/api/access/pair-code':
+                    if path == '/api/access/approve':
+                        self.access.approve_connection(data.get('id'))
+                        self._json(200, {'ok': True})
+                    elif path == '/api/access/security':
+                        self.access.set_security(data.get('require_login'), data.get('password'))
+                        self._json(200, {'ok': True, **self.access.security()})
+                    elif path == '/api/access/pair-code':
                         self._json(200, {'ok': True, **self.access.pairing_code()})
                     elif path == '/api/access/revoke':
                         self.access.revoke(data.get('id'))

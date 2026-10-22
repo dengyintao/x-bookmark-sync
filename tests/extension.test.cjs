@@ -386,3 +386,31 @@ test('extension update preserves only the already configured legacy origin',asyn
  assert.equal(h.stored.xbm_legacy_origins['http://nas'],true);
  assert.equal(Object.keys(h.stored.xbm_legacy_origins).length,1);
 });
+
+test('one-click approval keeps claim secret out of approval URL and stores only scoped credential',async()=>{
+ const h=setup({ok:true});const sent=[];h.context.chrome.storage.sync.set=async()=>{};
+ h.context.fetch=async(url,options)=>{
+  sent.push({url,options});
+  const result=url.endsWith('/api/health') ? {service:'xbm',protocol_version:1,connection_approval:true} :
+   url.endsWith('/api/access/connect') ? {ok:true,id:'a'.repeat(32),secret:'private-claim-secret',expires_in:300} :
+   {ok:true,pending:false,token:'approved-extension-token',id:'client',expires:4102444800};
+  return {ok:true,status:200,json:async()=>result};
+ };
+ const request=await vm.runInContext("beginNasConnection('http://nas','Test Chrome')",h.context);
+ assert.equal(request.secret,'private-claim-secret');
+ h.context.request=request;
+ assert.equal(await vm.runInContext("claimNasConnection('http://nas',request)",h.context),true);
+ assert.equal(h.stored.xbm_connections['http://nas'].token,'approved-extension-token');
+ assert.ok(sent.every(r=>!r.url.includes('private-claim-secret')));
+ assert.ok(sent.every(r=>r.options.headers.Authorization===undefined));
+});
+test('pending or rejected connection never overwrites existing credentials or outbox',async()=>{
+ const h=setup({ok:true});h.stored.xbm_pending_queue=[{tweet_id:'123'}];
+ h.context.request={id:'a'.repeat(32),secret:'private'};
+ h.context.fetch=async()=>({ok:true,status:200,json:async()=>({ok:true,pending:true})});
+ assert.equal(await vm.runInContext("claimNasConnection('http://nas',request)",h.context),false);
+ assert.equal(h.stored.xbm_connections['http://nas'].token,'synthetic-token');
+ h.context.fetch=async()=>({ok:false,status:400,json:async()=>({ok:false,error:'expired'})});
+ await assert.rejects(vm.runInContext("claimNasConnection('http://nas',request)",h.context),/expired/);
+ assert.equal(h.stored.xbm_pending_queue.length,1);
+});

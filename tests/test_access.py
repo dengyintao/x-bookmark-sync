@@ -5,7 +5,7 @@ import sqlite3
 import tempfile
 import threading
 import unittest
-from urllib.request import Request, urlopen
+from urllib.request import Request, urlopen, build_opener, ProxyHandler
 from urllib.error import HTTPError
 from unittest.mock import patch
 from xbm.config import Config
@@ -33,7 +33,7 @@ class AccessHTTP(unittest.TestCase):
         if token: request_headers['Authorization'] = 'Bearer '+token
         if cookie: request_headers['Cookie'] = cookie
         req = Request(self.base+path, data=json.dumps(body).encode() if body is not None else None, headers=request_headers)
-        with urlopen(req) as response:
+        with build_opener(ProxyHandler({})).open(req) as response:
             return json.load(response), response.headers
 
     def denied(self, path, code, **kwargs):
@@ -158,6 +158,69 @@ class AccessHTTP(unittest.TestCase):
         self.call('/api/bookmarks/delete',{'ids':['777']},cookie=cookie,headers=action)
         self.denied('/api/bookmarks/restore',403,body={'ids':['777']},cookie=cookie,headers=action)
         self.assertEqual(self.call('/api/bookmarks?trash=1',token=self.key)[0]['total'],1)
+
+    def test_lan_bootstrap_needs_dashboard_intent_and_issues_cookie(self):
+        self.assertTrue(self.call('/api/access/status')[0]['quick_access'])
+        self.denied('/api/access/local',403,body={})
+        self.denied('/api/access/local',403,body={},headers={'X-XBM-Action':'access','Origin':'https://evil.invalid'})
+        _, headers = self.call('/api/access/local',{},headers={'X-XBM-Action':'access','Origin':self.base})
+        cookie = headers['Set-Cookie'].split(';')[0]
+        self.assertTrue(self.call('/api/accounts',cookie=cookie)[0]['ok'])
+        self.denied('/api/accounts',401)  # No anonymous content API, even on LAN.
+        self.denied('/api/access/local',403,body={},headers={'X-XBM-Action':'access','Host':'public.example'})
+        self.denied('/api/access/local',403,body={},headers={'X-XBM-Action':'access','Host':'8.8.8.8'})
+        with patch('xbm.server.Handler._local_dashboard', return_value=False):
+            self.denied('/api/access/local',403,body={},headers={'X-XBM-Action':'access'})
+
+    def test_one_click_requires_owner_approval_and_private_claim_secret(self):
+        request = self.call('/api/access/connect',{'name':'Synthetic Chrome'})[0]
+        claim = {'id':request['id'],'secret':request['secret']}
+        self.assertTrue(self.call('/api/access/claim',claim)[0]['pending'])
+        self.denied('/api/access/request?id='+request['id'],401)
+        self.denied('/api/access/approve',401,body={'id':request['id']})
+        self.denied('/api/access/claim',400,body={**claim,'secret':'incorrect'})
+        details = self.call('/api/access/request?id='+request['id'],token=self.key)[0]
+        self.assertEqual(details['name'],'Synthetic Chrome')
+        self.assertNotIn('secret',details); self.assertNotIn('secret_hash',details)
+        self.call('/api/access/approve',{'id':request['id']},self.key,headers={'X-XBM-Action':'access'})
+        result=self.call('/api/access/claim',claim)[0]
+        self.assertFalse(result['pending'])
+        self.assertEqual(self.access.authenticate(result['token'])['role'],'extension')
+        self.call('/api/client/status',token=result['token'])
+        self.denied('/api/bookmarks',403,token=result['token'])
+        self.denied('/api/access/claim',400,body=claim)
+
+    def test_password_opt_in_persists_revokes_local_sessions_and_keeps_extension(self):
+        _, paired = self.pair()
+        local=self.access.local_session()['token']
+        headers={'X-XBM-Action':'access'}
+        self.denied('/api/access/security',400,body={'require_login':True,'password':'short'},token=self.key,headers=headers)
+        self.call('/api/access/security',{'require_login':True,'password':'Synthetic-password-2026'},self.key,headers=headers)
+        self.assertTrue(Access(self.cfg.state_dir).security()['require_login'])
+        self.assertFalse(self.call('/api/access/status')[0]['quick_access'])
+        self.denied('/api/access/local',403,body={},headers=headers)
+        self.denied('/api/accounts',401,token=local)
+        self.call('/api/client/status',token=paired['token'])
+        self.call('/api/access/login',{'key':'Synthetic-password-2026'},headers=headers)
+        self.call('/api/access/security',{'require_login':False},self.key,headers=headers)
+        self.assertTrue(self.call('/api/access/status')[0]['quick_access'])
+
+    def test_request_expiry_claim_race_and_restart(self):
+        request=self.access.request_connection('Browser','peer')
+        self.access.approve_connection(request['id'])
+        fresh=Access(self.cfg.state_dir)
+        from concurrent.futures import ThreadPoolExecutor
+        def claim(_):
+            try: return fresh.claim_connection(request['id'],request['secret'])['token']
+            except ValueError: return None
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            self.assertEqual(sum(v is not None for v in pool.map(claim, range(2))),1)
+        expired=self.access.request_connection('Browser','peer')
+        with self.access.db() as db: db.execute('UPDATE connection_requests SET expires=0')
+        with self.assertRaises(ValueError): self.access.approve_connection(expired['id'])
+        with self.assertRaises(ValueError): self.access.claim_connection(expired['id'],expired['secret'])
+        self.access.reset()
+        self.assertFalse(self.access.security()['require_login'])
 
 class OriginChecks(unittest.TestCase):
     def test_reverse_proxy_host_rewrite_retains_browser_same_origin_evidence(self):

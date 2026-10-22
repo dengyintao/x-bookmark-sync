@@ -44,6 +44,10 @@ class Access:
                 id TEXT PRIMARY KEY, hash TEXT UNIQUE NOT NULL, role TEXT NOT NULL,
                 name TEXT NOT NULL, created REAL NOT NULL, expires REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS pairing(hash TEXT PRIMARY KEY, expires REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS settings(id INTEGER PRIMARY KEY CHECK(id=1), require_login INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS connection_requests(
+                    id TEXT PRIMARY KEY, secret_hash TEXT NOT NULL, name TEXT NOT NULL,
+                    expires REAL NOT NULL, approved INTEGER NOT NULL DEFAULT 0);
                 CREATE TABLE IF NOT EXISTS owner_password(id INTEGER PRIMARY KEY CHECK(id=1), salt BLOB NOT NULL, hash BLOB NOT NULL);''')
         self.path.chmod(0o600)
 
@@ -115,6 +119,71 @@ class Access:
         hashed = hashlib.scrypt(password.encode(), salt=row['salt'], n=16384, r=8, p=1)
         return hmac.compare_digest(hashed, row['hash'])
 
+    def security(self):
+        with self.db() as db:
+            has_password = bool(db.execute('SELECT 1 FROM owner_password').fetchone())
+            row = db.execute('SELECT require_login FROM settings WHERE id=1').fetchone()
+        return {'require_login': bool(row[0]) if row else has_password,
+                'has_password': has_password}
+
+    def set_security(self, required, password=None):
+        if not isinstance(required, bool):
+            raise ValueError('请选择是否启用管理密码')
+        if required and not self.security()['has_password']:
+            self.configure_password(password)
+        with self.db() as db:
+            db.execute('INSERT OR REPLACE INTO settings VALUES(1,?)', (int(required),))
+            if required:
+                db.execute("DELETE FROM clients WHERE role='admin'")
+
+    def local_session(self):
+        with self.db() as db:
+            if self.security()['require_login']:
+                raise ValueError('请登录管理页面')
+            return self._issue(db, 'admin', '局域网管理页面')
+
+    def request_connection(self, name, peer):
+        self.attempt(peer)
+        if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80:
+            raise ValueError('浏览器名称须为 1–80 个字符')
+        request_id, secret = secrets.token_hex(16), secrets.token_urlsafe(32)
+        with self.db() as db:
+            db.execute('DELETE FROM connection_requests WHERE expires<=?', (time.time(),))
+            if db.execute('SELECT count(*) FROM connection_requests').fetchone()[0] >= 128:
+                raise PermissionError('连接请求过多，请稍后再试')
+            db.execute('INSERT INTO connection_requests VALUES(?,?,?,?,0)',
+                       (request_id, digest(secret), name.strip(), time.time()+PAIR_SECONDS))
+        return {'id': request_id, 'secret': secret, 'expires_in': PAIR_SECONDS}
+
+    def connection_request(self, request_id):
+        if not isinstance(request_id, str) or len(request_id) > 64:
+            raise ValueError('连接请求无效')
+        with self.db() as db:
+            row = db.execute('SELECT id,name,expires,approved FROM connection_requests WHERE id=? AND expires>?',
+                             (request_id, time.time())).fetchone()
+        if not row:
+            raise ValueError('连接请求已过期，请回到扩展重试')
+        return dict(row)
+
+    def approve_connection(self, request_id):
+        self.connection_request(request_id)
+        with self.db() as db:
+            db.execute('UPDATE connection_requests SET approved=1 WHERE id=? AND expires>?',
+                       (request_id, time.time()))
+
+    def claim_connection(self, request_id, secret):
+        if not isinstance(request_id, str) or not isinstance(secret, str) or len(secret) > 128:
+            raise ValueError('连接请求无效')
+        with self.db() as db:
+            row = db.execute('SELECT * FROM connection_requests WHERE id=? AND secret_hash=? AND expires>?',
+                             (request_id, digest(secret), time.time())).fetchone()
+            if not row:
+                raise ValueError('连接请求已过期或已完成，请回到扩展重试')
+            if not row['approved']:
+                return {'pending': True}
+            db.execute('DELETE FROM connection_requests WHERE id=?', (request_id,))
+            return {'pending': False, **self._issue(db, 'extension', row['name'])}
+
     def pairing_code(self):
         code = secrets.token_urlsafe(12)
         with self.db() as db:
@@ -157,4 +226,6 @@ class Access:
             db.execute('DELETE FROM clients')
             db.execute('DELETE FROM pairing')
             db.execute('DELETE FROM owner_password')
+            db.execute('DELETE FROM settings')
+            db.execute('DELETE FROM connection_requests')
             temporary.replace(self.key_path)

@@ -14,3 +14,11 @@ class ReleaseMetadata(unittest.TestCase):
         self.assertEqual(manifest['version'],version)
         self.assertTrue(extension)
         with self.assertRaises(ValueError):module.version_info('v0.0.0-invalid')
+
+    def test_fpk_password_is_optional_on_install_and_upgrade(self):
+        import json
+        root = Path(__file__).parents[1]/'packaging/fnos/wizard'
+        for name in ('install', 'upgrade'):
+            wizard = json.loads((root/name).read_text())
+            password = next(item for step in wizard for item in step['items'] if item.get('field') == 'wizard_admin_password')
+            self.assertFalse(any(rule.get('required') for rule in password['rules']))
