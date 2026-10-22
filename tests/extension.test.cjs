@@ -344,7 +344,7 @@ test('startup outage preserves queue and communicates incomplete history',async(
 test('unpaired NAS cannot receive pending bookmarks',async()=>{
  const h=setup({});h.stored.xbm_connections={};h.stored.xbm_pending_queue=[{tweet_id:'1'}];let calls=0;
  h.context.fetch=async()=>{calls++;throw Error('must not connect')};
- await assert.rejects(vm.runInContext("flushQueue('http://nas')",h.context),/配对/);
+ await assert.rejects(vm.runInContext("flushQueue('http://nas')",h.context),/连接 NAS/);
  assert.equal(calls,0);assert.equal(h.stored.xbm_pending_queue.length,1);
 });
 test('pairing credentials are bound to exact origin and do not follow redirects',async()=>{
@@ -353,8 +353,8 @@ test('pairing credentials are bound to exact origin and do not follow redirects'
  await vm.runInContext("nasRequest('http://nas','/api/client/status')",h.context);
  assert.equal(request.options.headers.Authorization,'Bearer synthetic-token');
  assert.equal(request.options.credentials,'omit');assert.equal(request.options.redirect,'error');
- await assert.rejects(vm.runInContext("nasRequest('http://other-nas','/api/client/status')",h.context),/配对/);
- await assert.rejects(vm.runInContext("nasRequest('http://nas:9999','/api/client/status')",h.context),/配对/);
+ await assert.rejects(vm.runInContext("nasRequest('http://other-nas','/api/client/status')",h.context),/连接 NAS/);
+ await assert.rejects(vm.runInContext("nasRequest('http://nas:9999','/api/client/status')",h.context),/连接 NAS/);
  await assert.rejects(vm.runInContext("nasRequest('http://nas/path','/api/client/status')",h.context),/地址/);
 });
 test('revoked credential keeps the outbox and asks for pairing',async()=>{
@@ -370,7 +370,7 @@ test('existing legacy origin stays compatible but never bypasses a secured NAS',
  await vm.runInContext("nasRequest('http://nas','/api/ingest',{method:'POST',body:'{}'})",h.context);
  assert.equal(requests.at(-1).options.headers.Authorization,undefined);
  h.context.fetch=async()=>({status:200});
- await assert.rejects(vm.runInContext("nasRequest('http://nas','/api/ingest',{method:'POST',body:'{}'})",h.context),/重新配对/);
+ await assert.rejects(vm.runInContext("nasRequest('http://nas','/api/ingest',{method:'POST',body:'{}'})",h.context),/连接 NAS/);
 });
 
 test('expired paired credential never downgrades to legacy mode',async()=>{
