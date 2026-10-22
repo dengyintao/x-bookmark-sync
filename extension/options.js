@@ -103,7 +103,10 @@ document.getElementById('connect').onclick = async () => {
     // Existing credentials survive upgrades. Connecting again does not mint another token.
     try {
       const current = await nasRequest(origin, '/api/client/status');
-      if (current.ok && (await current.json()).ok) { finishConnection(); return; }
+      if (current.ok && (await current.json()).ok) {
+        await chrome.storage.sync.set({serverUrl:origin});
+        finishConnection(); return;
+      }
     } catch (_) { /* A new/revoked/expired connection needs the owner's confirmation. */ }
     const request = await beginNasConnection(origin, document.getElementById('clientName').value.trim());
     await chrome.tabs.create({url:origin + '/#runs?connect=' + encodeURIComponent(request.id)});
