@@ -414,3 +414,21 @@ test('pending or rejected connection never overwrites existing credentials or ou
  await assert.rejects(vm.runInContext("claimNasConnection('http://nas',request)",h.context),/expired/);
  assert.equal(h.stored.xbm_pending_queue.length,1);
 });
+
+test('reconnecting an already authorized NAS saves the selected address without opening a tab',async()=>{
+ const h=setup({ok:true});const elements=new Map();let saved;
+ h.context.document={getElementById(id){
+  if(!elements.has(id)) elements.set(id,{value:'',addEventListener(){},replaceChildren(){},append(){}});
+  return elements.get(id);
+ },createElement(){return {}}};
+ h.context.chrome.permissions={request:async()=>true};
+ h.context.chrome.storage.sync.set=async value=>{saved=value};
+ h.context.chrome.runtime.sendMessage=async()=>({ok:true});
+ vm.runInContext(fs.readFileSync(path.join(__dirname,'../extension/options.js'),'utf8'),h.context);
+ await new Promise(setImmediate);
+ elements.get('serverUrl').value='http://nas';
+ await elements.get('connect').onclick();
+ assert.equal(saved.serverUrl,'http://nas');
+ assert.equal(h.created,0);
+ assert.match(elements.get('msg').textContent,/连接成功/);
+});
