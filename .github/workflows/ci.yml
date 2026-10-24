@@ -37,7 +37,7 @@ jobs:
         run: |
           for f in extension/*.js; do node --check "$f"; done
           node -e "JSON.parse(require('fs').readFileSync('extension/manifest.json','utf8'))"
-          node --test tests/extension.test.cjs
+          node --test tests/*.test.cjs
 
   build:
     needs: test

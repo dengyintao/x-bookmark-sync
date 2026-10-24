@@ -5,6 +5,7 @@ TRIM_APPDEST=$(cd "$TRIM_APPDEST" && pwd -P)
 pidfile="$TRIM_PKGVAR/server.pid"
 export PATH="$TRIM_APPDEST:$PATH"
 export HOME="$TRIM_PKGVAR"
+export XBM_GATEWAY_SOCKET="$TRIM_APPDEST/app.sock"
 # Only signal our own process; a stale PID may have been reused.
 alive() {
     [ -f "$pidfile" ] || return 1

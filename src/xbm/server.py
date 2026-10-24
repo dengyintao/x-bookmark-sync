@@ -104,10 +104,17 @@ class Handler(BaseHTTPRequestHandler):
     def _session_cookie(self, result):
         self.response_cookie = 'xbm_session=' + result['token'] + '; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000' + ('; Secure' if urlsplit(self.headers.get('Origin', '')).scheme == 'https' else '')
 
+    def _client_peer(self):
+        if getattr(self, 'gateway_user', None):
+            return self.gateway_user['id']
+        return self.client_address[0]
+
     def _local_dashboard(self):
         # Do not trust forwarded headers or DNS names for passwordless administration.
         # Requiring a private IP literal also prevents DNS rebinding from a public site.
         import ipaddress
+        if getattr(self, 'gateway_user', None):
+            return False
         try:
             peer = ipaddress.ip_address(self.client_address[0])
             host = ipaddress.ip_address(urlsplit('//' + self.headers.get('Host', '')).hostname)
@@ -154,10 +161,11 @@ class Handler(BaseHTTPRequestHandler):
                 cookie_auth = bool(token)
             except CookieError:
                 token = ''
-        principal = self.access.authenticate(token)
+        principal = getattr(self, 'gateway_user', None) or self.access.authenticate(token)
         if method == 'GET' and path == '/api/access/status':
             self._json(200, {'ok': True, 'authenticated': bool(principal),
                              'role': principal['role'] if principal else None,
+                             'nas_session': bool(getattr(self, 'gateway_user', None)),
                              'quick_access': self._local_dashboard() and not self.access.security()['require_login']})
             return False
         if method == 'POST' and path in {'/api/access/connect', '/api/access/claim', '/api/access/local'}:
@@ -173,7 +181,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     data = self._access_body()
                     if path.endswith('/connect'):
-                        result = self.access.request_connection(data.get('name'), self.client_address[0])
+                        result = self.access.request_connection(data.get('name'), self._client_peer())
                     else:
                         result = self.access.claim_connection(data.get('id'), data.get('secret'))
                     self._json(200, {'ok': True, **result})
@@ -189,11 +197,11 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 data = self._access_body()
                 if path.endswith('/login'):
-                    result = self.access.login(data.get('key'), self.client_address[0])
+                    result = self.access.login(data.get('key'), self._client_peer())
                     self._session_cookie(result)
                     self._json(200, {'ok': True})
                 else:
-                    result = self.access.pair(data.get('code'), data.get('name', ''), self.client_address[0])
+                    result = self.access.pair(data.get('code'), data.get('name', ''), self._client_peer())
                     self._json(200, {'ok': True, **result, 'protocol_version': 1})
             except PermissionError as error:
                 self._json(429, {'ok': False, 'error': str(error)})
@@ -203,7 +211,7 @@ class Handler(BaseHTTPRequestHandler):
         if not principal:
             self._json(401, {'ok': False, 'error': '请登录管理页面，或在扩展设置中重新配对 NAS'})
             return False
-        if cookie_auth and method == 'POST' and not web.same_origin(self, self.headers.get('X-XBM-Action') or 'access'):
+        if (cookie_auth or getattr(self, 'gateway_user', None)) and method == 'POST' and not web.same_origin(self, self.headers.get('X-XBM-Action') or 'access'):
             self._json(403, {'ok': False, 'error': 'same-origin action required'})
             return False
         if principal['role'] == 'extension':
@@ -392,6 +400,19 @@ def make_server(cfg: Config, port: int, *, require_auth: bool = True) -> Threadi
 
 def run(cfg: Config, port: int = 8765) -> None:
     server = make_server(cfg, port)
+    import os
+    import threading
+    gateway = None
+    if os.environ.get('XBM_GATEWAY_SOCKET'):
+        from .gateway import make_gateway
+        try:
+            gateway = make_gateway(server, Path(os.environ['XBM_GATEWAY_SOCKET']))
+            threading.Thread(target=gateway.serve_forever, daemon=True).start()
+        except Exception:
+            server.server_close()
+            server._xbm_migrations.close()
+            server._xbm_accounts.close()
+            raise
     accounts = server._xbm_accounts
     accounts.start()
     server._xbm_storage.start()
@@ -401,6 +422,9 @@ def run(cfg: Config, port: int = 8765) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        if gateway:
+            gateway.shutdown()
+            gateway.server_close()
         server._xbm_storage.close()
         server.server_close()  # Finish active HTTP handlers before closing their stores.
         server._xbm_migrations.close()

@@ -56,6 +56,9 @@ def verify_fpk(path, manifest):
             ui = json.loads(payload.extractfile('ui/config').read())
             if manifest['desktop_applaunchname'] not in ui['.url']:
                 raise ValueError('FPK desktop entry is missing')
+            entry = ui['.url'][manifest['desktop_applaunchname']]
+            if entry.get('gatewayPrefix') != '/app/x-bookmark-sync' or entry.get('gatewaySocket') != 'app.sock':
+                raise ValueError('FPK NAS session gateway entry is missing')
             for icon in ('ui/images/icon_64.png','ui/images/icon_256.png'):
                 if payload.getmember(icon).size <= 0:
                     raise ValueError('FPK desktop icon is empty')

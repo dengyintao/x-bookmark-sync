@@ -1,1 +1,1 @@
-{".url":{"x-bookmark-sync.main":{"title":"X 书签库","icon":"images/icon_{0}.png","type":"url","protocol":"http","port":"8765","url":"/","allUsers":false}}}
+{".url":{"x-bookmark-sync.main":{"title":"X 书签库","icon":"images/icon_{0}.png","type":"iframe","protocol":"","gatewayPrefix":"/app/x-bookmark-sync","gatewaySocket":"app.sock","url":"/app/x-bookmark-sync/","allUsers":false}}}

@@ -57,10 +57,12 @@ let selectedAccount = localStorage.getItem("xbm-account") || "";
 let accountsSignature = "";
 const selectedIds = new Set();
 let layout = localStorage.getItem("xbm-layout") || "cards";
+const servicePrefix = location.pathname === '/app/x-bookmark-sync' || location.pathname.startsWith('/app/x-bookmark-sync/') ? '/app/x-bookmark-sync' : '';
+function serviceUrl(path) { return servicePrefix + path; }
 function accountUrl(path) {
   const url = new URL(path, location.origin);
   url.searchParams.set("account", selectedAccount);
-  return url.pathname + url.search;
+  return serviceUrl(url.pathname + url.search);
 }
 async function refreshAccounts() {
   const data = await api("/api/accounts");
@@ -106,7 +108,7 @@ function bytes(n) {
   return `${n.toFixed(i ? 1 : 0)} ${units[i]}`;
 }
 async function dashboardHeaders(headers = {}) {
-  const response = await fetch('/api/dashboard-token', {cache:'no-store',credentials:'same-origin',signal:AbortSignal.timeout(10000)});
+  const response = await fetch(serviceUrl('/api/dashboard-token'), {cache:'no-store',credentials:'same-origin',signal:AbortSignal.timeout(10000)});
   const data = await response.json();
   if (!response.ok || !data.ok || !data.token) throw new Error('请刷新管理页面后重试');
   return {...headers,'X-XBM-Dashboard':data.token};
@@ -115,7 +117,7 @@ async function api(path, options = {}) {
   if (!authenticated) throw new Error("请先登录管理页面");
   const authStamp = authGeneration;
   if ((options.method || 'GET').toUpperCase() === 'POST') options = {...options,headers:await dashboardHeaders(options.headers)};
-  const r = await fetch(path === "/api/accounts" ? path : accountUrl(path), {
+  const r = await fetch(path === "/api/accounts" ? serviceUrl(path) : accountUrl(path), {
     ...options,
     signal: AbortSignal.timeout(12000),
     cache: "no-store",
@@ -822,7 +824,7 @@ async function unlockDashboard() {
   catch (error) { notice(error.message); }
 }
 async function accessRequest(path, data) {
-  const response = await fetch(path, {method:"POST", credentials:"same-origin", redirect:"error",
+  const response = await fetch(serviceUrl(path), {method:"POST", credentials:"same-origin", redirect:"error",
     headers:await dashboardHeaders({"Content-Type":"application/json", "X-XBM-Action":"access"}),
     body:JSON.stringify(data), signal:AbortSignal.timeout(10000)});
   const result = await response.json();
@@ -834,8 +836,9 @@ async function accessRequest(path, data) {
 }
 async function bootstrapAccess() {
   try {
-    const response = await fetch("/api/access/status", {cache:"no-store", signal:AbortSignal.timeout(10000)});
+    const response = await fetch(serviceUrl("/api/access/status"), {cache:"no-store", signal:AbortSignal.timeout(10000)});
     const data = await response.json();
+    $("logout").hidden = !!data.nas_session;
     if (data.authenticated && data.role === "admin") return unlockDashboard();
     if (data.quick_access) {
       await accessRequest("/api/access/local", {});
@@ -870,7 +873,7 @@ async function refreshClients() {
     }
   } catch (error) { $("paired-clients").textContent = error.message; }
 }
-$("access-open").onclick = () => { $("pair-server").textContent = location.origin; $("pair-result").textContent = ""; $("access-dialog").showModal(); refreshClients(); loadSecurity(); };
+$("access-open").onclick = () => { $("pair-server").textContent = servicePrefix ? '插件请填写 NAS 局域网 IP 地址及 :8765 端口；手机端复用飞牛登录，无需配对' : location.origin; $("pair-result").textContent = ""; $("access-dialog").showModal(); refreshClients(); loadSecurity(); };
 $("access-close").onclick = () => { $("pair-result").textContent = ""; $("access-dialog").close(); };
 $("access-refresh").onclick = refreshClients;
 $("pair-create").onclick = async () => {

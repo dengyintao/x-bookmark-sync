@@ -30,6 +30,8 @@ with tempfile.TemporaryDirectory(prefix='xbm-fpk-smoke-') as temporary:
         hook('main', 'start')
         hook('main', 'status')
         assert b'<html' in get('/').lower()
+        import stat
+        assert stat.S_ISSOCK((package/'app/app.sock').stat().st_mode)
         assert (root/'var/data/.xbm/admin-key.txt').stat().st_mode & 0o777 == 0o600
         assert json.loads(get('/api/status'))['version'] == expected_version
         hook('main', 'start')  # idempotent

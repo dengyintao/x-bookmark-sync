@@ -23,6 +23,17 @@ def get(handler) -> bool:
     if path in {'/', '/app.js', '/style.css', '/icon.svg', '/manifest.webmanifest'}:
         name = 'index.html' if path == '/' else path[1:]
         body = (ASSETS / name).read_bytes()
+        prefix = getattr(handler, 'gateway_prefix', '')
+        if prefix and name == 'index.html':
+            body = body.replace(b'="/', ('="' + prefix + '/').encode())
+        elif prefix and name == 'manifest.webmanifest':
+            import json
+            manifest = json.loads(body)
+            manifest['start_url'] = prefix + '/'
+            manifest['scope'] = prefix + '/'
+            for icon in manifest['icons']:
+                icon['src'] = prefix + icon['src']
+            body = json.dumps(manifest, ensure_ascii=False).encode()
         content_type = {'html': 'text/html', 'js': 'text/javascript', 'css': 'text/css',
                         'svg': 'image/svg+xml', 'webmanifest': 'application/manifest+json'}[name.rsplit('.', 1)[1]]
         handler.send_response(200)
