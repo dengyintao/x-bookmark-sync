@@ -43,9 +43,14 @@ class GatewayHTTP(unittest.TestCase):
             connection.sock = socket.socket(socket.AF_UNIX)
             connection.sock.connect(str(self.root/'app.sock'))
         with closing(connection):
-            connection.request('POST' if body is not None else 'GET', path,
-                body=json.dumps(body) if body is not None else None,
-                headers={'X-Trim-Userid':'1000','X-Trim-Isadmin':'true','Content-Type':'application/json',**(headers or {})})
+            try:
+                connection.request('POST' if body is not None else 'GET', path,
+                    body=json.dumps(body) if body is not None else None,
+                    headers={'X-Trim-Userid':'1000','X-Trim-Isadmin':'true','Content-Type':'application/json',**(headers or {})})
+            except BrokenPipeError:
+                # A rejecting HTTP/1.0 server may respond and close before the
+                # client finishes sending a POST body. Still inspect its response.
+                pass
             response = connection.getresponse()
             return response.status, response.read(), response.headers
 
