@@ -70,6 +70,18 @@ _MIGRATE_MEDIA = [
 ]
 
 
+def _upsert_article(conn: sqlite3.Connection, tweet_id: str, title: str,
+                    markdown: str, source: str, saved_at: float) -> None:
+    conn.execute(
+        """INSERT INTO articles(tweet_id, title, markdown, source, saved_at)
+           VALUES(?,?,?,?,?)
+           ON CONFLICT(tweet_id) DO UPDATE SET
+             title=excluded.title, markdown=excluded.markdown,
+             source=excluded.source, saved_at=excluded.saved_at""",
+        (tweet_id, str(title or "")[:500], markdown, str(source or "")[:50], saved_at),
+    )
+
+
 class Store:
     def __init__(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -97,6 +109,12 @@ class Store:
             if "purged_at" not in {r["name"] for r in self._conn.execute("PRAGMA table_info(tweets)")}:
                 self._conn.execute("ALTER TABLE tweets ADD COLUMN purged_at REAL DEFAULT 0")
             self._conn.execute("CREATE TABLE IF NOT EXISTS purge_files(path TEXT PRIMARY KEY, error TEXT DEFAULT '')")
+            self._conn.execute("""CREATE TABLE IF NOT EXISTS articles(
+                tweet_id TEXT PRIMARY KEY,
+                title TEXT DEFAULT '',
+                markdown TEXT NOT NULL,
+                source TEXT DEFAULT '',
+                saved_at REAL)""")
             self._conn.execute("CREATE TABLE IF NOT EXISTS download_policy(id INTEGER PRIMARY KEY CHECK(id=1), mode TEXT NOT NULL DEFAULT 'all', budget INTEGER NOT NULL DEFAULT 0, paused INTEGER NOT NULL DEFAULT 0)")
             self._conn.execute("INSERT OR IGNORE INTO download_policy(id) VALUES(1)")
             self._conn.commit()
@@ -133,6 +151,9 @@ class Store:
                 new_count += cur.rowcount
                 if self._conn.execute('SELECT purged_at FROM tweets WHERE tweet_id=?', (tweet['tweet_id'],)).fetchone()[0]:
                     continue
+                if tweet.get("article_markdown"):
+                    _upsert_article(self._conn, tweet["tweet_id"], tweet.get("article_title", ""),
+                                    tweet["article_markdown"], tweet.get("article_source", "extension"), now)
                 for kind, url in tweet["jobs"]:
                     cur = self._conn.execute(
                         """INSERT OR IGNORE INTO media_files
@@ -181,6 +202,25 @@ class Store:
         with self._lock:
             row = self._conn.execute(
                 "SELECT * FROM tweets WHERE tweet_id=?", (tweet_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    # ---- 长文章 ----
+
+    def save_article(self, tweet_id: str, title: str, markdown: str,
+                     source: str = "extension") -> None:
+        if not isinstance(tweet_id, str) or not tweet_id.isascii() or not tweet_id.isdigit():
+            raise ValueError("invalid tweet id")
+        if not isinstance(markdown, str) or not markdown.strip():
+            raise ValueError("article markdown is empty")
+        with self._lock, self._conn:
+            _upsert_article(self._conn, tweet_id, title, markdown, source, time.time())
+
+    def get_article(self, tweet_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                """SELECT tweet_id,title,markdown,source,saved_at
+                   FROM articles WHERE tweet_id=?""", (tweet_id,)
             ).fetchone()
         return dict(row) if row else None
 
@@ -371,6 +411,11 @@ class Store:
                 item["media"] = [dict(m) for m in self._conn.execute(
                     "SELECT id,kind,status,bytes,total_bytes,error FROM media_files WHERE tweet_id=? ORDER BY id",
                     (row["tweet_id"],)).fetchall()]
+                article = self._conn.execute(
+                    "SELECT title FROM articles WHERE tweet_id=?", (row["tweet_id"],)
+                ).fetchone()
+                item["article_saved"] = article is not None
+                item["article_title"] = article["title"] if article else ""
                 items.append(item)
         return {"items": items, "total": total, "limit": limit, "offset": offset}
 

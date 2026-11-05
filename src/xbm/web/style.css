@@ -451,6 +451,23 @@ dialog::backdrop {
   margin: 12px 0;
   color: var(--muted);
 }
+#detail-body .article-body h3 {
+  font-size: 14px;
+  margin: 20px 0 8px;
+}
+#detail-body .article-body pre {
+  margin: 0;
+  padding: 16px;
+  max-height: 60vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.8;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
 .sr-only {
   position: absolute;
   width: 1px;

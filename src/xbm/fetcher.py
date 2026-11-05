@@ -55,8 +55,8 @@ def summarize(tweet: Any) -> dict[str, Any]:
         "created_at": str(getattr(tweet, "created_at", "") or ""),
         "media": media_info,
         "media_count": len(media_info),
-        # X Article 判定：M3 实现，此处先占位
-        "has_article": False,
+        # Full text still needs the optional `xbm article` fallback.
+        "has_article": bool(getattr(tweet, "article", None)),
     }
 
 

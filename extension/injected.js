@@ -19,6 +19,37 @@
   const buffer = [];
   const diagnostics = { graphqlResponses: 0, responses: 0, parsed: 0, operations: [], dataKeys: [] };
 
+  // X Article：timeline 常常只给元数据；只有拿到 blocks 或 plain_text 才算有正文。
+  // preview_text 是截断预览，绝不当作全文上报。
+  function articleNode(value) {
+    if (!value || typeof value !== 'object') return null;
+    if (value.article && typeof value.article === 'object') return articleNode(value.article);
+    if (value.article_results && value.article_results.result) return articleNode(value.article_results.result);
+    if (value.result && typeof value.result === 'object') return articleNode(value.result);
+    return value;
+  }
+
+  function articleFrom(r, legacy) {
+    try {
+      const node = articleNode((r && (r.article || r.article_results)) ||
+        (legacy && legacy.article));
+      if (!node) return null;
+      const state = (node.content_state && typeof node.content_state === 'object') ? node.content_state :
+        (node.content && typeof node.content === 'object') ? node.content : {};
+      const source = Array.isArray(state.blocks) ? state.blocks :
+        (Array.isArray(node.blocks) ? node.blocks : []);
+      const blocks = [];
+      for (const block of source) {
+        if (!block || typeof block.text !== 'string' || !block.text.trim()) continue;
+        blocks.push({ type: typeof block.type === 'string' ? block.type : 'unstyled', text: block.text });
+      }
+      const text = typeof node.plain_text === 'string' ? node.plain_text :
+        (typeof node.text === 'string' ? node.text : '');
+      if (!text.trim() && !blocks.length) return null;
+      return { title: typeof node.title === 'string' ? node.title : '', text: text, blocks: blocks };
+    } catch (e) { return null; }
+  }
+
   function parseTweet(result) {
     try {
       // 兼容 tombstone / 包裹结构
@@ -54,7 +85,7 @@
         return u.expanded_url || u.url || '';
       }).filter(Boolean);
 
-      return {
+      const out = {
         tweet_id: legacy.id_str || r.rest_id,
         text: legacy.full_text || '',
         created_at: legacy.created_at || '',
@@ -64,10 +95,14 @@
              '/status/' + (legacy.id_str || r.rest_id),
         media: media,
         urls: urls,
-        // 是否含 X Article：timeline 只给元数据，全文 M3 由扩展代抓
-        has_article: !!(r.article || (legacy.entities && legacy.entities.urls || [])
+        // 是否含 X Article：timeline 多数只给元数据，正文缺失时 NAS 显示未归档。
+        has_article: !!(r.article || r.article_results ||
+          (legacy.entities && legacy.entities.urls || [])
           .some(function (u) { return (u.expanded_url || '').includes('/article/'); })),
       };
+      const article = articleFrom(r, legacy);
+      if (article) out.article = article;
+      return out;
     } catch (e) {
       return null;
     }

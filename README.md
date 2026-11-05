@@ -1,5 +1,12 @@
 # xbm — X 书签同步到 NAS
 
+## 0.6.3 新功能与使用
+
+- **长文章正文**：X 在书签响应中返回完整正文（blocks 或 plain_text）时，正文随书签一并归档到数据库和 `<媒体目录>/<tweet_id>/article.md`；管理页详情可查看，卡片标注“文章已归档/未归档”。只有元数据时明确显示正文未归档，不会用 `preview_text` 的截断预览冒充全文。
+- **备用补抓**：已执行 `xbm auth login` 时，可用 `xbm article <tweet_id>` 为单条已同步书签补抓正文。
+- **失败告警**：`[notify]` 可配置 Bark 或 Telegram Bot；备用 `xbm sync` 连续失败达到 `fail_alert_threshold` 时发送，单个通道失败不影响同步或其他通道。
+- **扩展 0.4.2**：解析并随 ingest 提交文章正文；升级后请重新加载扩展并刷新 X 页面。
+
 ## 0.5.0 新功能与使用
 
 - 书签支持卡片、紧凑列表和媒体预览，浏览器会记住展示偏好；搜索、媒体类型与下载状态可组合筛选。纯文字不计为“媒体全部已下载”。
@@ -8,7 +15,7 @@
 - 保持已登录的 X 书签页打开。每轮最多滚动 300 次，连续约 22 秒无新增时停止并提示可能不完整，只有 X 明确返回结束信号才标记列表结束。总数未知，不显示完成百分比。
 - “快速同步”只采集最近内容，定时同步也使用快速模式。先更新 NAS，再重新加载扩展并刷新 X 页面。
 
-把 X（Twitter）书签里的推文自动同步到 NAS 本地：图片、视频、长文章全文。
+把 X（Twitter）书签里的推文自动同步到 NAS 本地：图片、视频，以及 X 响应中提供的长文章正文。
 
 - 路线：**Chrome 扩展被动拦截 + 服务端下载**（不使用付费 API；仍受登录、限流和页面改版影响）
 - 详细设计见 [DESIGN.md](DESIGN.md)
@@ -114,7 +121,7 @@ src/xbm/
   auth.py         # （备用）twifork 登录与 cookie 管理
   fetcher.py      # （备用）twifork 书签增量抓取
   downloader.py   # （M2）CDN 直链下载图片/视频
-  articles.py     # （M3）长文章全文 → Markdown
+  articles.py     # 长文章正文解析、Markdown 落盘与可选抓取入口
   notify.py       # 失败告警（Bark/Telegram/日志）
 ```
 
@@ -123,6 +130,8 @@ src/xbm/
 - 当前部署形态：独立 Python HTTP 服务，可由 systemd 常驻运行；内置 Web 管理界面，0.4.1 起提供独立飞牛安装包。
 - 扩展与服务端走同一份 ingest 协议（`POST /api/ingest`），采集器可替换；备选采集器见 DESIGN.md §2.2（Headless 浏览器）。
 - 媒体下载走 CDN 签名直链，免登录、无 cookie 维护。
+- 长文章只在 X 响应包含完整正文时归档（`articles` 表及 `<媒体目录>/<tweet_id>/article.md`）；只有元数据时，管理页明确显示“文章未归档”，不会用 `preview_text` 的截断预览冒充全文。`xbm.articles.fetch_article` 为已登录的备用 twifork 客户端提供抓取入口，未认证时返回空；已执行 `xbm auth login` 时可用 `xbm article <tweet_id>` 把正文写入数据库与媒体目录。
+- 失败告警在 `[notify]` 配置 Bark 或 Telegram Bot，也可只写日志。备用 `xbm sync` 连续失败达到 `fail_alert_threshold` 时发送；告警尝试失败不会中断同步，内容不含 cookie、密钥或书签正文。
 
 ## 0.2.0 本地改进
 

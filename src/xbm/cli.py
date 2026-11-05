@@ -15,9 +15,8 @@ import json
 import sys
 from pathlib import Path
 
-from . import auth, config as config_mod
+from . import articles, config as config_mod, notify
 from .db import Store
-from .fetcher import run_sync
 
 
 def _ctx(args):
@@ -28,6 +27,7 @@ def _ctx(args):
 
 
 def cmd_auth_login(args) -> int:
+    from . import auth
     cfg, store = _ctx(args)
     store.close()
     state_dir = cfg.state_dir
@@ -62,6 +62,7 @@ def cmd_auth_login(args) -> int:
 
 
 def cmd_auth_check(args) -> int:
+    from . import auth
     cfg, store = _ctx(args)
     store.close()
     try:
@@ -77,6 +78,8 @@ def cmd_auth_check(args) -> int:
 
 
 def cmd_sync(args) -> int:
+    from . import auth
+    from .fetcher import run_sync
     cfg, store = _ctx(args)
     try:
         ok = auth.check_login_sync(cfg.state_dir)
@@ -100,7 +103,8 @@ def cmd_sync(args) -> int:
         fails = store.consecutive_failures()
         print(f"同步失败：{e}（连续失败 {fails} 次）")
         if fails >= cfg.fail_alert_threshold:
-            print(f"已达告警阈值（{cfg.fail_alert_threshold}），请检查 notify 配置")
+            print(f"已达告警阈值（{cfg.fail_alert_threshold}），正在发送告警")
+            notify.alert(cfg, f"连续 {fails} 次同步失败，最近错误：{e}")
         store.close()
         return 1
 
@@ -196,6 +200,33 @@ def cmd_restore(args) -> int:
     return 0
 
 
+def cmd_article(args) -> int:
+    """Optional fallback: fetch one article through the stored twifork login."""
+    cfg, store = _ctx(args)
+    try:
+        if not store.get_tweet(args.tweet_id):
+            print('该推文不在当前书签库中，请先同步书签后再归档正文。')
+            return 1
+        markdown = asyncio.run(articles.fetch_article(args.tweet_id, state_dir=cfg.state_dir))
+        if not markdown:
+            print('未取得文章正文：登录 cookie 可能失效，或该推文没有完整长文章。')
+            return 1
+        title = next((line[2:].strip() for line in markdown.splitlines()
+                      if line.startswith('# ')), '')
+        store.save_article(args.tweet_id, title, markdown, source='twifork')
+        articles.save_article(cfg.media_dir, args.tweet_id, markdown)
+    except FileNotFoundError:
+        print('缺少登录 cookie，请先运行 `xbm auth login`。')
+        return 2
+    except Exception as error:
+        print(f'文章归档失败：{error}')
+        return 1
+    finally:
+        store.close()
+    print(f'已归档文章正文到 {articles.article_path(cfg.media_dir, args.tweet_id)}')
+    return 0
+
+
 def cmd_access_key(args) -> int:
     from .access import Access
     cfg = config_mod.load(args.config)
@@ -238,6 +269,10 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--full", action="store_true", help="首次全量回填（配合 --max-pages）")
     ps.add_argument("--max-pages", type=int, default=0, help="本轮最大翻页数（默认用配置）")
     ps.set_defaults(func=cmd_sync)
+
+    par = sub.add_parser("article", help="用备用登录抓取一条书签的长文章正文")
+    par.add_argument("tweet_id")
+    par.set_defaults(func=cmd_article)
 
     pe = sub.add_parser("export", help="导出书签索引 JSONL")
     pe.add_argument("--out", default="bookmarks.jsonl")

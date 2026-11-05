@@ -182,6 +182,23 @@ test('parser handles nested timeline modules and rest_id',async()=>{
  assert.equal(result.tweets.length,1);assert.equal(result.tweets[0].tweet_id,'123');
  assert.equal(result.diagnostics.parsed,1);
 });
+test('parser archives full article bodies and rejects preview-only metadata',async()=>{
+ const full=await interceptFixture({data:{timeline:{instructions:[{tweet_results:{result:{
+  rest_id:'9',legacy:{id_str:'9',full_text:'teaser'},
+  article:{article_results:{result:{title:'Long form',content_state:{blocks:[
+   {type:'unstyled',text:'Body text'},{type:'header-one',text:'Head'}]}}}}
+ }}}]}}});
+ assert.equal(full.tweets[0].has_article,true);
+ assert.equal(full.tweets[0].article.title,'Long form');
+ assert.equal(Array.from(full.tweets[0].article.blocks,b=>b.text).join('|'),'Body text|Head');
+
+ const preview=await interceptFixture({data:{timeline:{instructions:[{tweet_results:{result:{
+  rest_id:'10',legacy:{id_str:'10',full_text:'teaser'},
+  article:{article_results:{result:{title:'Preview only',preview_text:'truncated…'}}}
+ }}}]}}});
+ assert.equal(preview.tweets[0].has_article,true);
+ assert.equal(preview.tweets[0].article,undefined);
+});
 test('parser diagnoses changed schema without claiming success',async()=>{
  const result=await interceptFixture({data:{new_shape:{}}});
  assert.equal(result.tweets.length,0);assert.equal(result.diagnostics.responses,1);

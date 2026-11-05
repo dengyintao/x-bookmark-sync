@@ -47,7 +47,7 @@ class AccessHTTP(unittest.TestCase):
         return code, result
 
     def test_private_routes_require_auth_including_media_and_migrations(self):
-        for path in ['/api/accounts','/api/status','/api/bookmarks','/api/media/1',
+        for path in ['/api/accounts','/api/status','/api/bookmarks','/api/media/1','/api/article/1',
                      '/api/storage','/api/diagnostics','/api/migrations','/api/browser-account','/api/client/status']:
             self.denied(path, 401)
         self.denied('/api/ingest', 401, body={'tweets':[]})
@@ -85,7 +85,7 @@ class AccessHTTP(unittest.TestCase):
         self.assertEqual(status['tweets'],1)
         self.assertNotIn('media_dir',status)
         self.call('/api/browser-account',{'account':'x:fixture','observed_at':1},token)
-        for path in ['/api/accounts','/api/bookmarks','/api/status','/api/access/clients','/api/media/1','/api/storage']:
+        for path in ['/api/accounts','/api/bookmarks','/api/status','/api/access/clients','/api/media/1','/api/article/123','/api/storage']:
             self.denied(path,403,token=token)
         self.denied('/api/bookmarks/delete',403,body={'ids':['123']},token=token,headers={'X-XBM-Action':'bookmarks'})
         self.denied('/api/storage/policy',403,body={'mode':'all','budget':0,'paused':False},token=token,headers={'X-XBM-Action':'storage'})

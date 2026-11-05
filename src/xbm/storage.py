@@ -62,10 +62,13 @@ class Storage:
                         files.add(str(self.safe_path(cfg.media_dir,candidate)))
                 metadata = directory/'meta.json'
                 if metadata.is_file():files.add(str(self.safe_path(cfg.media_dir,metadata)))
+                article = directory/'article.md'
+                if article.is_file():files.add(str(self.safe_path(cfg.media_dir,article)))
             with store._conn:
                 for value in files:
                     store._conn.execute('INSERT OR IGNORE INTO purge_files(path) VALUES(?)',(value,))
                 store._conn.execute(f'DELETE FROM media_files WHERE tweet_id IN ({marks})', ids)
+                store._conn.execute(f'DELETE FROM articles WHERE tweet_id IN ({marks})', ids)
                 store._conn.execute(f"UPDATE tweets SET purged_at=?,author='',screen_name='',text='',created_at='',url='',has_article=0 WHERE tweet_id IN ({marks})",[time.time(),*ids])
         self.cleanup(account)
         return {'purged':len(rows), **self.summary(account)}

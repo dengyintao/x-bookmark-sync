@@ -214,6 +214,8 @@ function bookmarks() {
         ),
       );
     } else foot.append(el("span", "纯文字", "badge"));
+    if (item.has_article)
+      foot.append(el("span", item.article_saved ? "文章已归档" : "文章未归档", "badge"));
     foot.append(el("small", date(item.synced_at)));
     card.append(foot);
     const button = el("button", "查看详情 →");
@@ -226,14 +228,39 @@ function bookmarks() {
   }
   return grid;
 }
+function articleSection(item) {
+  const section = el("section", undefined, "article-body");
+  section.append(el("h3", "文章正文"));
+  if (!item.article_saved) {
+    section.append(
+      el(
+        "p",
+        "X 本次同步响应未包含文章全文，正文未归档。可在 X 中打开原文查看。",
+        "media-placeholder",
+      ),
+    );
+    return section;
+  }
+  const body = el("pre", "正在加载文章…");
+  section.append(body);
+  api("/api/article/" + encodeURIComponent(item.tweet_id))
+    .then((data) => {
+      body.textContent = data.markdown;
+    })
+    .catch((error) => {
+      body.textContent = "文章加载失败：" + error.message;
+    });
+  return section;
+}
 function detail(item) {
   const body = $("detail-body");
-  body.replaceChildren(
-    author(item),
-    el("p", item.text || "暂无正文", "text"),
+  const content = [author(item), el("p", item.text || "暂无正文", "text")];
+  if (item.has_article) content.push(articleSection(item));
+  content.push(
     original(item),
     el("p", "入库时间：" + date(item.synced_at), "view-note"),
   );
+  body.replaceChildren(...content);
   for (const m of item.media || []) {
     if (m.status === "done") {
       if (m.kind === "photo") {

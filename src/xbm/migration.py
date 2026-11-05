@@ -29,11 +29,19 @@ def libraries(manager, target):
             yield key, source_cfg, source, target_cfg, dest
 
 
+TABLES = ('tweets', 'media_files', 'sync_runs', 'articles')
+
+
+def _read_tables(conn, order: bool = False):
+    """Read the shared tables, tolerating backups written before `articles` existed."""
+    names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    return {table: [dict(r) for r in conn.execute(
+                f"SELECT * FROM {table}" + (' ORDER BY rowid' if order else ''))]
+            for table in TABLES if table in names}
+
+
 def snapshot(source, dest):
-    def read(store):
-        return {table: [dict(r) for r in store._conn.execute(f'SELECT * FROM {table} ORDER BY rowid')]
-                for table in ('tweets', 'media_files', 'sync_runs')}
-    return read(source), read(dest)
+    return _read_tables(source._conn, order=True), _read_tables(dest._conn, order=True)
 
 
 def digest(value):
@@ -240,6 +248,8 @@ class Migrations:
                 elif value['status'] == 'done':
                     conn.execute("UPDATE media_files SET status='done',local_path=?,bytes=?,total_bytes=?,speed=0,error='',next_retry_at=0 WHERE id=?",
                                  (value['local_path'], value['bytes'], value['total_bytes'], match['id']))
+            for row in old.get('articles', []):
+                insert(conn, 'articles', row, ignore=True)
             for row in old['sync_runs']:
                 insert(conn, 'sync_runs', {k: v for k, v in row.items() if k != 'id'})
             # Metadata writes are prepared before the DB commit; previous versions
@@ -264,16 +274,17 @@ class Migrations:
                     document.update(account=key, media=[{'type': r['kind'], 'local_path': r['local_path'],
                         'remote_url': r['remote_url'], 'bytes': r['bytes']} for r in rows])
                     path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding='utf-8')
-            for table in ('tweets', 'media_files', 'sync_runs'):
+            for table in TABLES:
                 conn.execute(f'DELETE FROM legacy.{table}')
             expected = len({r['tweet_id'] for r in old['tweets'] + previous['tweets']})
             if conn.execute('SELECT COUNT(*) FROM tweets').fetchone()[0] != expected:
                 raise ValueError('迁移后书签数量校验失败')
             result.update(tweets=len(old['tweets']), media=len(old['media_files']), runs=len(old['sync_runs']),
+                          articles=len(old.get('articles', [])),
                           merged_media=merged, transferred_files=linked, total=expected, validated=True)
             after = []
             for db in ('legacy','main'):
-                after.append({table:[dict(r) for r in conn.execute(f'SELECT * FROM {db}.{table} ORDER BY rowid')] for table in ('tweets','media_files','sync_runs')})
+                after.append({table:[dict(r) for r in conn.execute(f'SELECT * FROM {db}.{table} ORDER BY rowid')] for table in TABLES})
             result['after_token'] = digest([key, *after])
             self.update(job, 'running', result)
             conn.execute('INSERT INTO ownership_migrations(id) VALUES (?)', (job,))
@@ -314,22 +325,30 @@ class Migrations:
         result = item['result']
         with libraries(self.manager, item['account']) as args:
             key, source_cfg, source, target_cfg, dest = args
-            if digest([key, *snapshot(source, dest)]) != result['after_token']:
-                raise ValueError('归属后已有新数据或下载状态变化，为避免覆盖数据，不能自动撤销')
+            current = snapshot(source, dest)
+            if digest([key, *current]) != result['after_token']:
+                # Tasks completed before articles existed carry a three-table token.
+                # Only accept it while no article data could be lost.
+                legacy = [{table: data[table] for table in ('tweets', 'media_files', 'sync_runs')}
+                          for data in current]
+                if current[0].get('articles') or current[1].get('articles') or \
+                        digest([key, *legacy]) != result['after_token']:
+                    raise ValueError('归属后已有新数据或下载状态变化，为避免覆盖数据，不能自动撤销')
             backup = Path(result['backup'])
             with sqlite3.connect(backup / 'source.db') as saved:
                 saved.row_factory = sqlite3.Row
-                old = {t: [dict(r) for r in saved.execute(f'SELECT * FROM {t}')] for t in ('tweets','media_files','sync_runs')}
+                old = _read_tables(saved)
             with sqlite3.connect(backup / 'target.db') as saved:
                 saved.row_factory = sqlite3.Row
-                previous = {t: [dict(r) for r in saved.execute(f'SELECT * FROM {t}')] for t in ('tweets','media_files','sync_runs')}
+                previous = _read_tables(saved)
             self.update(job, 'rolling_back', result)
             conn = sqlite3.connect(target_cfg.state_dir / 'xbm.db')
             conn.execute('ATTACH DATABASE ? AS legacy', (str(source_cfg.state_dir / 'xbm.db'),))
             try:
                 conn.execute('BEGIN IMMEDIATE')
                 for db, rows in [('main', previous), ('legacy', old)]:
-                    for table, values in rows.items():
+                    for table in TABLES:
+                        values = rows.get(table, [])
                         conn.execute(f'DELETE FROM {db}.{table}')
                         for row in values:
                             insert(conn, db+'.'+table, row)

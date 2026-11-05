@@ -5,6 +5,7 @@ Private NAS service with owner sessions and revocable extension pairing.
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import time
 import re
@@ -18,6 +19,9 @@ from .config import Config
 from .accounts import AccountManager, account_key
 from .db import Store
 from .downloader import pick_best
+from .articles import extract_article, render_markdown, save_article
+
+log = logging.getLogger('xbm.server')
 
 
 def _tweet_info(t: dict[str, Any]) -> dict[str, Any]:
@@ -35,7 +39,8 @@ def _tweet_info(t: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def ingest_payload(payload: dict[str, Any], store: Store) -> dict[str, Any]:
+def ingest_payload(payload: dict[str, Any], store: Store,
+                   media_dir: Path | None = None) -> dict[str, Any]:
     if not isinstance(payload, dict) or not isinstance(payload.get("tweets", []), list):
         raise ValueError("tweets must be an array")
     for tweet in payload.get("tweets", []):
@@ -59,24 +64,57 @@ def ingest_payload(payload: dict[str, Any], store: Store) -> dict[str, Any]:
             for v in variants:
                 if not isinstance(v.get("bitrate", 0), (int, float)) or not isinstance(v.get("content_type", ""), str):
                     raise ValueError("invalid media variant")
+        if tweet.get("article") is not None:
+            article = tweet["article"]
+            if not isinstance(article, dict):
+                raise ValueError("article must be an object")
+            for field in ("title", "text", "plain_text"):
+                if article.get(field) is not None and not isinstance(article[field], str):
+                    raise ValueError(f"article {field} must be a string")
+            blocks = article.get("blocks")
+            if blocks is not None:
+                if not isinstance(blocks, list) or any(
+                        not isinstance(b, dict) or not isinstance(b.get("text", ""), str)
+                        or not isinstance(b.get("type", "unstyled"), str) for b in blocks):
+                    raise ValueError("invalid article blocks")
     prepared = []
     for tweet in payload.get("tweets", []):
         info = _tweet_info(tweet)
         info["jobs"] = [picked for item in tweet.get("media", [])
                         if (picked := pick_best(item))]
+        article = extract_article(tweet.get("article")) if tweet.get("article") is not None else None
+        if article:
+            info["article_title"] = article.get("title", "")
+            info["article_markdown"] = render_markdown(
+                article, author=info["author"], screen_name=info["screen_name"],
+                url=info["url"], created_at=info["created_at"])
+            info["article_source"] = "extension"
         prepared.append(info)
     source = payload.get("source", "extension")
     captured_at = payload.get("captured_at", "")
     if not isinstance(source, str) or not isinstance(captured_at, str):
         raise ValueError("source and captured_at must be strings")
-    return store.ingest_batch(prepared, source[:100], captured_at[:100])
+    result = store.ingest_batch(prepared, source[:100], captured_at[:100])
+    if media_dir is not None:
+        for info in prepared:
+            if not info.get("article_markdown"):
+                continue
+            stored = store.get_article(info["tweet_id"])
+            if not stored or stored["markdown"] != info["article_markdown"]:
+                continue  # Purged or superseded content must not reappear as a file.
+            try:
+                # The database copy is authoritative; the file is a readable mirror.
+                save_article(media_dir, info["tweet_id"], info["article_markdown"])
+            except (OSError, ValueError) as error:
+                log.warning('article file mirror failed for %s: %s', info["tweet_id"], error)
+    return result
 
 
 class Handler(BaseHTTPRequestHandler):
     config: Config
     store: Store
 
-    def log_message(self, fmt, *args):  # 安静日志，M4 再接日志系统
+    def log_message(self, fmt, *args):  # 安静日志，避免逐请求访问日志刷屏
         pass
 
     def _cors(self):
@@ -365,7 +403,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError('account mismatch')
             if not self._select_account(key, create=True):
                 return
-            result = ingest_payload(payload, self.store)
+            result = ingest_payload(payload, self.store, self.config.media_dir)
             result['account'] = self.account
         except ValueError as e:
             self._json(400, {"ok": False, "error": str(e)[:200]})

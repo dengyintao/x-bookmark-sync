@@ -69,6 +69,14 @@ def get(handler) -> bool:
         except ValueError as error:
             handler._json(400, {'ok': False, 'error': str(error)})
         return True
+    match = re.fullmatch(r'/api/article/(\d{1,30})', path)
+    if match:
+        article = handler.store.get_article(match[1])
+        if not article:
+            handler._json(404, {'ok': False, 'error': '这篇书签的文章正文尚未归档'})
+        else:
+            handler._json(200, {'ok': True, **article})
+        return True
     match = re.fullmatch(r'/api/media/(\d+)', path)
     if match:
         serve_media(handler, int(match[1]))
